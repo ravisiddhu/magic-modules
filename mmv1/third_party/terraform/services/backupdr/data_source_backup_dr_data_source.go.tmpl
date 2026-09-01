@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -58,6 +59,11 @@ var singleDataSourceSchema = map[string]*schema.Schema{
 		Type: 		schema.TypeString,
 		Computed: 	true,
 		Description: `The backup configuration state.`,
+	},
+	"backup_blocked_by_vault_access_restriction": {
+		Type:     schema.TypeBool,
+		Computed: true,
+		Description: `This field is set to true if the backup is blocked by vault access restriction.`,
 	},
 	"backup_config_info": {
 		Type:		schema.TypeList,
@@ -371,6 +377,12 @@ func flattenDataSourceIntoResourceData(d *schema.ResourceData, res map[string]in
 	if err := d.Set("total_stored_bytes", flattenDataSourceBackupDRDataSourceTotalStoredBytes(res["totalStoredBytes"], d, config)); err != nil {
 		return fmt.Errorf("Error setting total_stored_bytes: %s", err)
 	}
+	if err := d.Set("config_state", flattenDataSourceBackupDRDataSourceConfigState(res["configState"], d, config)); err != nil {
+		return fmt.Errorf("Error setting config_state: %s", err)
+	}
+	if err := d.Set("backup_blocked_by_vault_access_restriction", flattenDataSourceBackupDRDataSourceBackupBlockedByVaultAccessRestriction(res["backupBlockedByVaultAccessRestriction"], d, config)); err != nil {
+		return fmt.Errorf("Error setting backup_blocked_by_vault_access_restriction: %s", err)
+	}
 	if err := d.Set("backup_config_info", flattenDataSourceBackupDRDataSourceBackupConfigInfo(res["backupConfigInfo"], d, config)); err != nil {
 		return fmt.Errorf("Error setting backup_config_info: %s", err)
 	}
@@ -548,6 +560,14 @@ func flattenDataSourceBackupDRDataSourceEtag(v interface{}, d *schema.ResourceDa
 }
 
 func flattenDataSourceBackupDRDataSourceState(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+	return v
+}
+
+func flattenDataSourceBackupDRDataSourceConfigState(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+	return v
+}
+
+func flattenDataSourceBackupDRDataSourceBackupBlockedByVaultAccessRestriction(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
 	return v
 }
 
@@ -780,4 +800,22 @@ func copySchemaMap(m map[string]*schema.Schema) map[string]*schema.Schema {
 		newMap[k] = v
 	}
 	return newMap
+}
+
+func init() {
+	registry.Schema{
+		Name: "google_backup_dr_data_source",
+		ProductName: "backupdr",
+		Type: registry.SchemaTypeDataSource,
+		Schema: DataSourceGoogleCloudBackupDRDataSource(),
+	}.Register()
+}
+
+func init() {
+	registry.Schema{
+		Name: "google_backup_dr_data_sources",
+		ProductName: "backupdr",
+		Type: registry.SchemaTypeDataSource,
+		Schema: DataSourceGoogleCloudBackupDRDataSources(),
+	}.Register()
 }

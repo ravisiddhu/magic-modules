@@ -395,6 +395,17 @@ The following arguments are supported:
 
 * `key_revocation_action_type` - (optional) Action to be taken when a customer's encryption key is revoked. Supports `STOP` and `NONE`, with `NONE` being the default.
 
+* `deletion_policy` - (Optional) Whether Terraform will be prevented from destroying the resource. Defaults to "DELETE".
+    When a 'terraform destroy' or 'terraform apply' would delete the resource,
+    the command will fail if this field is set to "PREVENT" in Terraform state.
+    When set to "ABANDON", the command will remove the resource from Terraform
+    management without updating or deleting the resource in the API.
+    When set to "DELETE", deleting the resource is allowed.
+
+* `workload_identity_config` - (Optional) Workload Identity Config. More details about
+    this configuration option are [detailed below](#nested_workload_identity_config).
+
+
 <a name="nested_disk"></a>The `disk` block supports:
 
 * `auto_delete` - (Optional) Whether or not the disk should be auto-deleted.
@@ -481,6 +492,12 @@ The following arguments are supported:
 
 * `resource_policies` (Optional) -- A list (short name or id) of resource policies to attach to this disk for automatic snapshot creations. Currently a max of 1 resource policy is supported.
 
+* `storage_pool` - (Optional) The URL of the storage pool in which the new disk is created.
+    For example:
+    * `https://www.googleapis.com/compute/v1/projects/{project}/zones/{zone}/storagePools/{storagePool}`
+    * `/projects/{project}/zones/{zone}/storagePools/{storagePool}`
+
+
 <a name="nested_source_image_encryption_key"></a>The `source_image_encryption_key` block supports:
 
 * `raw_key` - (Optional)  A 256-bit [customer-supplied encryption key]
@@ -556,7 +573,11 @@ The following arguments are supported:
     array of alias IP ranges for this network interface. Can only be specified for network
     interfaces on subnet-mode networks. Structure [documented below](#nested_alias_ip_range).
 
-* `nic_type` - (Optional) The type of vNIC to be used on this interface. Possible values: GVNIC, VIRTIO_NET, MRDMA, IRDMA.
+* `alias_ipv6_range` - (Optional) [Beta] An
+    array of alias IPv6 ranges for this network interface. Can only be specified for network
+    interfaces on subnet-mode networks. Structure [documented below](#nested_alias_ip_range).
+
+* `nic_type` - (Optional) The type of vNIC to be used on this interface. Possible values: GVNIC, VIRTIO_NET, MRDMA, IRDMA, IDPF.
 
 * `network_attachment` - (Optional) The URL of the network attachment that this interface should connect to in the following format: projects/{projectNumber}/regions/{region_name}/networkAttachments/{network_attachment_name}.
 
@@ -633,10 +654,13 @@ specified, then this instance will have no external IPv6 Internet access. Struct
    [here](https://cloud.google.com/compute/docs/nodes/create-nodes).
    Structure [documented below](#nested_node_affinities).
 
-* `provisioning_model` - (Optional) Describe the type of preemptible VM. This field accepts the value `STANDARD` or `SPOT`. If the value is `STANDARD`, there will be no discount. If this   is set to `SPOT`,
+* `provisioning_model` - (Optional) Describe the type of provisioning model for the instance. This field accepts the value `STANDARD`, `SPOT`, `FLEX_START`, or `RESERVATION_BOUND`. If the value is `STANDARD`, there will be no discount. If this is set to `SPOT`,
     `preemptible` should be `true` and `automatic_restart` should be
     `false`. For more info about
-    `SPOT`, read [here](https://cloud.google.com/compute/docs/instances/spot)
+    `SPOT`, read [here](https://cloud.google.com/compute/docs/instances/spot).
+    If this is set to `FLEX_START`, `automatic_restart` should be `false` and `instance_termination_action` should be set to `DELETE`. A `max_run_duration` must also be specified. For more info about
+    `FLEX_START`, read [here](https://cloud.google.com/compute/docs/instances/flex-start-vms).
+    If this is set to `RESERVATION_BOUND`, the instance is bound to a specific reservation and will only consume capacity from that reservation. A `reservation_affinity` block with `type` set to `SPECIFIC_RESERVATION` should also be configured.
 
 * `instance_termination_action` - (Optional) Describe the type of termination action for `SPOT` VM. Can be `STOP` or `DELETE`.  Read more on [here](https://cloud.google.com/compute/docs/instances/create-use-spot)
 
@@ -644,7 +668,7 @@ specified, then this instance will have no external IPv6 Internet access. Struct
 
 * `availability_domain` - (Optional) Specifies the availability domain to place the instance in. The value must be a number between 1 and the number of availability domains specified in the spread placement policy attached to the instance.
 
-* `host_error_timeout_seconds` - (Optional) [Beta](../guides/provider_versions.html.markdown) Specifies the time in seconds for host error detection, the value must be within the range of [90, 330] with the increment of 30, if unset, the default behavior of host error recovery will be used.
+* `host_error_timeout_seconds` - (Optional) Specifies the time in seconds for host error detection, the value must be within the range of [90, 330] with the increment of 30, if unset, the default behavior of host error recovery will be used.
 
 * `max_run_duration` -  (Optional)  The duration of the instance. Instance will run and be terminated after then, the termination action could be defined in `instance_termination_action`. Only support `DELETE` `instance_termination_action` at this point. Structure is [documented below](#nested_max_run_duration).
 
@@ -677,6 +701,8 @@ specified, then this instance will have no external IPv6 Internet access. Struct
 
 * `skip_guest_os_shutdown` - (Optional) [Beta](../guides/provider_versions.html.markdown) Boolean parameter. Default is false and there will be 120 seconds between GCE ACPI G2 Soft Off and ACPI G3 Mechanical Off for Standard VMs and 30 seconds for Spot VMs.
 
+* `preemption_notice_duration` - (Optional) [Beta](../guides/provider_versions.html.markdown) Specifies the Metadata Service preemption notice duration before the GCE ACPI G2 Soft Off signal is triggered for Spot VMs only. If not specified, there will be no wait before the G2 Soft Off signal is triggered. Structure is [documented below](#nested_preemption_notice_duration).
+
 <a name="nested_graceful_shutdown"></a>The `graceful_shutdown` block supports:
 
 * `enabled` - (Required) Opts-in for graceful shutdown.
@@ -692,6 +718,17 @@ specified, then this instance will have no external IPv6 Internet access. Struct
 
     * `seconds` - (Required) Span of time at a resolution of a second.
         The value must be between 1 and 3600, which is 3,600 seconds (one hour).`
+
+<a name="nested_preemption_notice_duration"></a>The `preemption_notice_duration` block supports:
+
+* `nanos` - (Optional) Span of time that's a fraction of a second at nanosecond
+    resolution. Durations less than one second are represented with a 0
+    `seconds` field and a positive `nanos` field. Must be from 0 to
+     999,999,999 inclusive.
+
+* `seconds` - (Required) Span of time at a resolution of a second. Must be from 0 to
+   315,576,000,000 inclusive. Note: these bounds are computed from: 60
+   sec/min * 60 min/hr * 24 hr/day * 365.25 days/year * 10000 years.
 
 <a name="nested_guest_accelerator"></a>The `guest_accelerator` block supports:
 
@@ -731,9 +768,9 @@ The `specific_reservation` block supports:
 
 <a name="nested_confidential_instance_config"></a>The `confidential_instance_config` block supports:
 
-* `enable_confidential_compute` (Optional) Defines whether the instance should have confidential compute enabled with AMD SEV. If enabled, [`on_host_maintenance`](#on_host_maintenance) can be set to MIGRATE if [`min_cpu_platform`](#min_cpu_platform) is set to `"AMD Milan"`. Otherwise, [`on_host_maintenance`](#on_host_maintenance) has to be set to TERMINATE or this will fail to create the VM.
+* `enable_confidential_compute` (Optional) Defines whether the instance should have confidential compute enabled with AMD SEV. If enabled, [`on_host_maintenance`](#on_host_maintenance) can be set to MIGRATE if [`min_cpu_platform`](#min_cpu_platform) is set to `"AMD Milan"` or `"AMD Genoa"`. Otherwise, [`on_host_maintenance`](#on_host_maintenance) has to be set to TERMINATE or this will fail to create the VM.
 
-* `confidential_instance_type` (Optional) Defines the confidential computing technology the instance uses. SEV is an AMD feature. TDX is an Intel feature. One of the following values is required: `SEV`, `SEV_SNP`, `TDX`. [`on_host_maintenance`](#on_host_maintenance) can be set to MIGRATE if [`confidential_instance_type`](#confidential_instance_type) is set to `SEV` and [`min_cpu_platform`](#min_cpu_platform) is set to `"AMD Milan"`. Otherwise, [`on_host_maintenance`](#on_host_maintenance) has to be set to TERMINATE or this will fail to create the VM. If `SEV_SNP`, currently [`min_cpu_platform`](#min_cpu_platform) has to be set to `"AMD Milan"` or this will fail to create the VM.
+* `confidential_instance_type` (Optional) Defines the confidential computing technology the instance uses. SEV is an AMD feature. TDX is an Intel feature. One of the following values is required: `SEV`, `SEV_SNP`, `TDX`. [`on_host_maintenance`](#on_host_maintenance) can be set to MIGRATE if [`confidential_instance_type`](#confidential_instance_type) is set to `SEV` and [`min_cpu_platform`](#min_cpu_platform) is set to `"AMD Milan"` or `"AMD Genoa"`. Otherwise, [`on_host_maintenance`](#on_host_maintenance) has to be set to TERMINATE or this will fail to create the VM. If `SEV_SNP`, currently [`min_cpu_platform`](#min_cpu_platform) has to be set to `"AMD Milan"` or this will fail to create the VM.
 
 <a name="nested_network_performance_config"></a>The `network_performance_config` block supports:
 
@@ -752,6 +789,12 @@ The `specific_reservation` block supports:
 * `performance_monitoring_unit` - (Optional) [The PMU](https://cloud.google.com/compute/docs/pmu-overview) is a hardware component within the CPU core that monitors how the processor runs code. Valid values for the level of PMU are `STANDARD`, `ENHANCED`, and `ARCHITECTURAL`.
 
 * `enable_uefi_networking` - (Optional) Whether to enable UEFI networking for instance creation.
+
+<a name="nested_workload_identity_config"></a>The `workload_identity_config` block supports:
+
+* `identity` - (Required) Identity SPIFFE id.
+
+* `identity_certificate_enabled` - (Required) Specifies whether identity certificates are enabled.
 
 ## Attributes Reference
 

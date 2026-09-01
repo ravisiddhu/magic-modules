@@ -7,6 +7,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-provider-google/google/acctest"
 	"github.com/hashicorp/terraform-provider-google/google/envvar"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/appengine"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/resourcemanager"
 )
 
 func TestAccAppEngineApplication_basic(t *testing.T) {
@@ -155,7 +157,7 @@ resource "google_project" "acceptance" {
 
 resource "google_app_engine_application" "acceptance" {
   project        = google_project.acceptance.project_id
-  auth_domain    = "tf-test.club"
+  auth_domain    = "hashicorptest.com"
   location_id    = "us-central"
   database_type  = "CLOUD_DATASTORE_COMPATIBILITY"
   serving_status = "USER_DISABLED"

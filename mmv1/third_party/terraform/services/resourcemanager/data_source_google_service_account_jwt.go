@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-provider-google/google/registry"
+	iamcredentials_tpg "github.com/hashicorp/terraform-provider-google/google/services/iamcredentials"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 	"github.com/hashicorp/terraform-provider-google/google/verify"
@@ -32,14 +34,14 @@ func DataSourceGoogleServiceAccountJwt() *schema.Resource {
 			"target_service_account": {
 				Type:         schema.TypeString,
 				Required:     true,
-				ValidateFunc: verify.ValidateRegexp("(" + strings.Join(verify.PossibleServiceAccountNames, "|") + ")"),
+				ValidateFunc: verify.ValidateRegexp("^(" + strings.Join(verify.PossibleServiceAccountNames, "|") + ")$"),
 			},
 			"delegates": {
 				Type:     schema.TypeSet,
 				Optional: true,
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
-					ValidateFunc: verify.ValidateRegexp(verify.ServiceAccountLinkRegex),
+					ValidateFunc: verify.ValidateRegexp("^" + verify.ServiceAccountLinkRegex + "$"),
 				},
 			},
 			"jwt": {
@@ -91,7 +93,7 @@ func dataSourceGoogleServiceAccountJwtRead(d *schema.ResourceData, meta interfac
 		Delegates: tpgresource.ConvertStringSet(d.Get("delegates").(*schema.Set)),
 	}
 
-	service := config.NewIamCredentialsClient(userAgent)
+	service := iamcredentials_tpg.NewClient(config, userAgent)
 
 	jwtResponse, err := service.Projects.ServiceAccounts.SignJwt(name, jwtRequest).Do()
 
@@ -106,4 +108,13 @@ func dataSourceGoogleServiceAccountJwtRead(d *schema.ResourceData, meta interfac
 	}
 
 	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_service_account_jwt",
+		ProductName: "resourcemanager",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleServiceAccountJwt(),
+	}.Register()
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
+	"github.com/hashicorp/terraform-provider-google/google/services/iambeta"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -53,17 +55,33 @@ func dataSourceGoogleComputeDefaultServiceAccountRead(d *schema.ResourceData, me
 		return err
 	}
 
-	projectCompResource, err := config.NewComputeClient(userAgent).Projects.Get(project).Do()
-	if err != nil {
-		return transport_tpg.HandleDataSourceNotFoundError(err, d, "GCE default service account", fmt.Sprintf("%q GCE default service account", project))
-	}
-
-	serviceAccountName, err := tpgresource.ServiceAccountFQN(projectCompResource.DefaultServiceAccount, d, config)
+	url, err := tpgresource.ReplaceVars(d, config, "{{ComputeBasePath}}projects/{{project}}")
 	if err != nil {
 		return err
 	}
 
-	sa, err := config.NewIamClient(userAgent).Projects.ServiceAccounts.Get(serviceAccountName).Do()
+	projectCompResource, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
+		Config:    config,
+		Method:    "GET",
+		Project:   project,
+		RawURL:    url,
+		UserAgent: userAgent,
+	})
+	if err != nil {
+		return transport_tpg.HandleDataSourceNotFoundError(err, d, "GCE default service account", fmt.Sprintf("%q GCE default service account", project))
+	}
+
+	defaultServiceAccount, ok := projectCompResource["defaultServiceAccount"].(string)
+	if !ok {
+		return fmt.Errorf("Error reading GCE default service account for project %s: expected string, got %T(%v)", project, projectCompResource["defaultServiceAccount"], projectCompResource["defaultServiceAccount"])
+	}
+
+	serviceAccountName, err := tpgresource.ServiceAccountFQN(defaultServiceAccount, d, config)
+	if err != nil {
+		return err
+	}
+
+	sa, err := iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Get(serviceAccountName).Do()
 	if err != nil {
 		return transport_tpg.HandleDataSourceNotFoundError(err, d, fmt.Sprintf("Service Account %q", serviceAccountName), serviceAccountName)
 	}
@@ -89,4 +107,13 @@ func dataSourceGoogleComputeDefaultServiceAccountRead(d *schema.ResourceData, me
 	}
 
 	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_compute_default_service_account",
+		ProductName: "compute",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleComputeDefaultServiceAccount(),
+	}.Register()
 }

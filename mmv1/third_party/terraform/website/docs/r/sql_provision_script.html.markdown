@@ -1,0 +1,237 @@
+---
+subcategory: "Cloud SQL"
+description: |-
+  Executes a SQL script to provision in-database resources in Google Cloud SQL.
+---
+
+# google_sql_provision_script
+
+Executes a SQL script to provision in-database resources on a Cloud SQL Instance. Before executing a SQL script, you may need to configure your database user and permissions. For more information, see the [Cloud SQL official documentation](https://cloud.google.com/sql/docs/postgres/executesql-instance), or the [JSON API](https://cloud.google.com/sql/docs/admin-api/v1beta4/instances/executeSql).
+
+~> **Note:** The SQL script and its execution response might transit through intermediate locations between your client and the location of the target instance.
+
+~> **Note:** If you let Terraform connect to the instance via [IAM database authentication](https://cloud.google.com/sql/docs/mysql/authentication) to execute the script, the identity account used to apply your Terraform config must exist as an IAM user, IAM service account, or IAM group in the instance. You also need to grant roles or privileges to this IAM account so it has permission to execute statements in your provision scripts. See the example below.
+ 
+
+
+## Example Usage
+
+Example managing a Cloud SQL Postgres instance with a provision script using IAM Database Authentication.
+
+```hcl
+resource "google_sql_database_instance" "instance" {
+  name             = "my-instance"
+  database_version = "POSTGRES_17"
+
+  settings {
+    tier            = "db-perf-optimized-N-2"
+    data_api_access = "ALLOW_DATA_API"
+    database_flags {
+      name  = "cloudsql.iam_authentication"
+      value = "on"
+    }
+  }
+  root_password = "changeme"
+}
+
+# Create a database user for your account and grant roles so it has privilege
+# to access the database. Choose an IAM type, e.g., "CLOUD_IAM_USER"
+# and "CLOUD_IAM_SERVICE_ACCOUNT". If a service account is used and the
+# instance is Postgres, please trim the ".gserviceaccount.com" suffix to
+# avoid exceeding the username length limit.
+resource "google_sql_user" "iam_user" {
+  name     = "account-used-to-apply-this-config@example.com"
+  instance = google_sql_database_instance.instance.name
+  type     = "CLOUD_IAM_USER" 
+  database_roles = ["cloudsqlsuperuser"]
+}
+
+resource "google_sql_database" "database" {
+  name     = "my-database"
+  instance = google_sql_database_instance.instance.name
+}
+
+resource "google_sql_provision_script" "table" {
+  # You can inline the script or import from a file like
+  # `script  = file("${path.module}/script.sql")`
+  # When modified, the whole script will be executed again. It's recommended to
+  # make the script idempotent with patterns like `create if not exists ...` or
+  # `if not exists (select ...) then ... end if`. If it's not possible to make a
+  # statement idempotent, you can run it once and then remove it from the script.
+  script  = "CREATE TABLE IF NOT EXISTS table1 ( col VARCHAR(16) NOT NULL );"
+
+  instance = google_sql_database_instance.instance.name
+  database = google_sql_database.database.name
+  description = "sql script to create tables"
+
+  # The identity account used to apply your Terraform config must exist as an
+  # IAM account in the instance. Terraform connects to the instance via IAM
+  # database authentication to execute the script.
+  depends_on = [google_sql_user.iam_user]
+}
+```
+
+
+Example managing a Cloud SQL MySQL instance with a provision script using IAM Database Authentication.
+
+```hcl
+resource "google_sql_database_instance" "instance" {
+  name             = "my-instance"
+  database_version = "MYSQL_8_4"
+
+  settings {
+    tier            = "db-perf-optimized-N-2"
+    data_api_access = "ALLOW_DATA_API"
+    database_flags {
+      name  = "cloudsql_iam_authentication"
+      value = "on"
+    }
+  }
+  root_password = "changeme"
+}
+
+# Create a database user for your account and grant roles so it has privilege
+# to access the database. Choose an IAM type, e.g., "CLOUD_IAM_USER"
+# and "CLOUD_IAM_SERVICE_ACCOUNT". If a service account is used and the
+# instance is Postgres, please trim the ".gserviceaccount.com" suffix to
+# avoid exceeding the username length limit.
+resource "google_sql_user" "iam_user" {
+  name     = "account-used-to-apply-this-config@example.com"
+  instance = google_sql_database_instance.instance.name
+  type     = "CLOUD_IAM_USER"
+
+  # Roles granted to the user. For least privilege, you can create smaller roles
+  # and then assign them to this user in place of `cloudsqlsuperuser`.
+  # This field doesn't support MySQL 5.6 and 5.7. 
+  database_roles = ["cloudsqlsuperuser"]
+}
+
+resource "google_sql_provision_script" "script" {
+  # You can inline the script or import from a file like
+  # `script  = file("${path.module}/script.sql")`
+  # When modified, the whole script will be executed again. It's recommended to
+  # make the script idempotent with patterns like `create if not exists ...` or
+  # `if not exists (select ...) then ... end if`. If it's not possible to make a
+  # statement idempotent, you can run it once and then remove it from the script.
+  script  = file("${path.module}/script.sql")
+
+  description = "sql script to create DBs and tables"
+  instance = google_sql_database_instance.instance.name
+
+  # Some of your queries may require a database. You can create and use a
+  # database inside the script, or explicitly reference a google_sql_database
+  # like `database = google_sql_database.database.name`.
+
+  # The identity account used to apply your Terraform config must exist as an
+  # IAM account in the instance. Terraform connects to the instance via IAM
+  # database authentication to execute the script.
+  depends_on = [google_sql_user.iam_user]
+}
+```
+
+
+Example managing a Cloud SQL instance with a provision script using built-in password authentication, when the password is stored as a regional secret with Secret Manager in the same region as the Cloud SQL instance.
+
+```hcl
+resource "google_sql_user" "built_in_user" {
+  name     = "tf-user"
+  host     = "%"  # Don't set this field for PostgreSQL and SQL Server.
+  instance = google_sql_database_instance.instance.name
+  password = "changeme"
+  type     = "BUILT_IN"
+}
+
+# Create a regional secret. Global secrets are not supported even if
+# located in one region only.
+resource "google_secret_manager_regional_secret" "secret" {
+  secret_id = "db-password"
+
+  # Use the same region as the Cloud SQL instance.
+  location = "us-central1"
+}
+
+resource "google_secret_manager_regional_secret_version" "secret_version" {
+  secret = google_secret_manager_regional_secret.secret.id
+  secret_data = "changeme"
+}
+
+resource "google_sql_provision_script" "script" {
+  # You can inline the script or import from a file like
+  # `script  = file("${path.module}/script.sql")`
+  # When modified, the whole script will be executed again. It's recommended to
+  # make the script idempotent with patterns like `create if not exists ...` or
+  # `if not exists (select ...) then ... end if`. If it's not possible to make a
+  # statement idempotent, you can run it once and then remove it from the script.
+  script  = file("${path.module}/script.sql")
+
+  description = "sql script to create DBs and tables"
+  instance = google_sql_database_instance.instance.name
+  database = google_sql_database.database.name
+  user = google_sql_user.built_in_user.name
+
+  # The location should be the same as the Cloud SQL instance's location.
+  password_secret_version = "projects/my-project/locations/us-central1/secrets/db-password/versions/latest"
+
+  # The built-in database user and password secret version must be created
+  # first. Cloud SQL will retrieve password from Secret Manager
+  # and connect to this user account to execute your script.
+  depends_on = [
+    google_sql_user.built_in_user,
+    google_secret_manager_regional_secret_version.secret_version
+  ]
+}
+```
+
+
+## Argument Reference
+
+The following arguments are supported:
+
+* `description` - (Optional) The description of the provision script.
+
+* `script` - (Required) The SQL script to provision database resources. Its execution time limit
+    is 30 s and it will be canceled if it takes longer than 30 s. You can use patterns like
+    `create if not exists …` or `if not exists (select …) then … end if` to avoid existence-related
+    errors. If it's not possible to make a statement idempotent, you can run it once and then remove
+    it from this script.
+
+* `instance` - (Required) The name of the Cloud SQL instance. Changing this forces the script to
+    be run on the new instance.
+
+* `database` - (Optional) The name of the database to which Terraform connects. Changing
+    this forces Terraform to connect to the new database and run the script. This argument is
+    required for Postgres instances. It's optional for MySQL, but some of your queries may require
+    a database. You can create and use a database in the script or explicitly reference a
+    google_sql_database.
+
+* `user` - (Optional) The name of the built-in database user to authenticate as. For MySQL user,
+    omit '@' and the hostname. The user should exist as a built-in user in the database.
+    When `user` and `password_secret_version` are provided, the script is run using this user.
+    Otherwise, the script is run using the identity account used to apply your Terraform config.
+    Changing this forces the script to be run using the new user.
+
+* `password_secret_version` - (Optional) The resource name of the Secret Manager secret storing the
+    password. The secret should be a regional secret and stored in the exact same region as the Cloud
+    SQL instance. Follow https://docs.cloud.google.com/secret-manager/regional-secrets/create-regional-secret.
+    When user and password_secret_version are provided, the script is run using this user.
+    Otherwise, the script is run using the identity account used to apply your Terraform config.
+    Changing this field forces the script to be run again.
+
+* `project` - (Optional) The ID of the project in which the resource belongs. If it is not provided,
+    the provider project is used.
+
+* `deletion_policy` - (Optional) The deletion policy for the resources created by the script. The
+    default is "ABANDON". It must be "ABANDON" to allow Terraform to abandon the resources. If you
+    want to delete resources, add statements in the script such as `drop … if exists`.
+
+## Attributes Reference
+
+Only the arguments listed above are exposed as attributes.
+
+## Timeouts
+
+This resource provides the following
+[Timeouts](https://developer.hashicorp.com/terraform/plugin/sdkv2/resources/retries-and-customizable-timeouts) configuration options: configuration options:
+
+- `create` - Default is 20 minutes. Note the script has its own timeout too -- the provision script execution must finish in 30 s or it will be canceled by the database. 
+

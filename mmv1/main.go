@@ -28,27 +28,22 @@ var outputPathFlag = flag.String("output", "", "path to output generated files t
 
 // Example usage: --version beta
 var versionFlag = flag.String("version", "", "optional version name. If specified, this version is preferred for resource generation when applicable")
-
 var baseDirectoryFlag = flag.String("base", "", "optional directory containing mmv1 third_party/ and templates/ directories. Empty value defaults to GetCwd().")
-
 var overrideDirectoryFlag = flag.String("overrides", "", "optional directory containing yaml overrides")
-
 var productFlag = flag.String("product", "", "optional product name. If specified, the resources under the specific product will be generated. Otherwise, resources under all products will be generated.")
-
 var resourceFlag = flag.String("resource", "", "optional resource name. Limits generation to the specified resource within a particular product.")
-
 var doNotGenerateCode = flag.Bool("no-code", false, "do not generate code")
-
 var doNotGenerateDocs = flag.Bool("no-docs", false, "do not generate docs")
-
 var providerFlag = flag.String("provider", "", "optional provider name. If specified, a non-default provider will be used.")
-
 var openapiGenerate = flag.Bool("openapi-generate", false, "Generate MMv1 YAML from openapi directory (Experimental)")
+var verboseFlag = flag.Bool("verbose", false, "enable verbose logging")
 
 func main() {
 
 	// Handle all flags in main. Other functions must not access flag values directly.
 	flag.Parse()
+
+	google.VerboseLogging = *verboseFlag
 
 	if *openapiGenerate {
 		parser := openapi_generate.NewOpenapiParser("openapi_generate/openapi", "products")
@@ -89,7 +84,9 @@ func GenerateProducts(product, resource, providerName, version, outputPath, base
 		panic(err)
 	}
 
-	loader := loader.NewLoader(loader.Config{Version: version, BaseDirectory: baseDirectory, OverrideDirectory: overrideDirectory, Sysfs: ofs, CompilerTarget: providerName})
+	wrappedFS := loader.NewVarsReplacingFS(ofs)
+
+	loader := loader.NewLoader(loader.Config{Version: version, BaseDirectory: baseDirectory, OverrideDirectory: overrideDirectory, Sysfs: wrappedFS, CompilerTarget: providerName})
 	loader.LoadProducts()
 	loader.AddExtraFields()
 	loader.Validate()
@@ -101,13 +98,17 @@ func GenerateProducts(product, resource, providerName, version, outputPath, base
 			productsToGenerate = append(productsToGenerate, p.PackagePath)
 		}
 	} else {
-		var productToGenerate = fmt.Sprintf("products/%s", product)
-		productsToGenerate = []string{productToGenerate}
+		for _, prod := range strings.Split(product, ",") {
+			productsToGenerate = append(productsToGenerate, fmt.Sprintf("products/%s", strings.TrimSpace(prod)))
+		}
 	}
+
+	productCount, resourceCount := loader.CountProductsAndResources(productsToGenerate, resource)
+	google.InitProgress(resourceCount)
 
 	for _, productApi := range loadedProducts {
 		wg.Add(1)
-		go GenerateProduct(version, providerName, productApi, outputPath, startTime, ofs, productsToGenerate, resource, generateCode, generateDocs)
+		go GenerateProduct(version, providerName, productApi, outputPath, startTime, wrappedFS, productsToGenerate, resource, generateCode, generateDocs)
 	}
 	wg.Wait()
 
@@ -120,13 +121,16 @@ func GenerateProducts(product, resource, providerName, version, outputPath, base
 	})
 
 	// In order to only copy/compile files once per provider this must be called outside
-	// of the products loop. Create an MMv1 provider with an arbitrary product (the first loaded).
-	providerToGenerate := newProvider(providerName, version, productsForVersion[0], startTime, ofs)
+	// of the products loop. Create an MMv1 provider with a nil product to trigger shared file behavior.
+	providerToGenerate := newProvider(providerName, version, nil, startTime, wrappedFS)
 	providerToGenerate.CopyCommonFiles(outputPath, generateCode, generateDocs)
 
 	if generateCode {
 		providerToGenerate.CompileCommonFiles(outputPath, productsForVersion, "")
 	}
+
+	log.Printf("Generated %d products, %d resources for %s version %s.", productCount, resourceCount, providerName, version)
+	log.Println("Done MM generation.")
 }
 
 // GenerateProduct generates code and documentation for a product
@@ -137,13 +141,18 @@ func GenerateProduct(version, providerName string, productApi *api.Product, outp
 	defer wg.Done()
 
 	if !slices.Contains(productsToGenerate, productApi.PackagePath) {
-		log.Printf("%s not specified, skipping generation", productApi.PackagePath)
+		google.LogVerbose("%s not specified, skipping generation", productApi.PackagePath)
 		return
 	}
 
-	log.Printf("%s: Generating files", productApi.PackagePath)
+	google.LogVerbose("%s: Generating files", productApi.PackagePath)
 	providerToGenerate := newProvider(providerName, version, productApi, startTime, fsys)
 	providerToGenerate.Generate(outputPath, resourceToGenerate, generateCode, generateDocs)
+
+	providerToGenerate.CopyCommonFiles(outputPath, generateCode, generateDocs)
+	if generateCode {
+		providerToGenerate.CompileCommonFiles(outputPath, []*api.Product{productApi}, "")
+	}
 }
 
 func newProvider(providerName, version string, productApi *api.Product, startTime time.Time, fsys fs.FS) provider.Provider {

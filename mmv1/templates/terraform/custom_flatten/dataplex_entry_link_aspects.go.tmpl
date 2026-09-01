@@ -1,0 +1,92 @@
+// This file is a transposition of mmv1/templates/terraform/flatten_property_method.go.tmpl
+// Most of the code is copied from there, with the exception of sorting logic.
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  if v == nil {
+    return v
+  }
+  l := v.([]interface{})
+  transformed := make([]map[string]interface{}, 0, len(l))
+  for _, raw := range l {
+    original := raw.(map[string]interface{})
+    if len(original) < 1 {
+      // Do not include empty json objects coming back from the api
+      continue
+    }
+    transformed = append(transformed, map[string]interface{}{
+
+  {{- range $prop := $.ItemType.UserProperties }}
+    {{- if not (or $prop.IgnoreRead $prop.WriteOnlyLegacy $prop.WriteOnly) }}
+      "{{ underscore $prop.Name }}": flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}{{$prop.TitlelizeProperty}}(original["{{ $prop.ApiName }}"], d, config),
+    {{- end }}
+  {{- end }}
+    })
+  }
+
+  configData := []map[string]interface{}{}
+
+  for _, item := range d.Get("aspects").([]interface{}) {
+    configData = append(configData, item.(map[string]interface{}))
+  }
+
+  sorted, err := tpgresource.SortMapsByConfigOrder(configData, transformed, "aspect_key")
+  if err != nil {
+    log.Printf("[ERROR] Could not sort API response value: %s", err)
+    return v
+  }
+
+  return sorted
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectKey(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  return v
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}Aspect(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  if v == nil {
+    return nil
+  }
+  original := v.(map[string]interface{})
+  if len(original) == 0 {
+    return nil
+  }
+  transformed := make(map[string]interface{})
+  transformed["aspect_type"] =
+    flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectAspectType(original["aspectType"], d, config)
+  transformed["path"] =
+    flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectPath(original["path"], d, config)
+  transformed["create_time"] =
+    flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectCreateTime(original["createTime"], d, config)
+  transformed["update_time"] =
+    flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectUpdateTime(original["updateTime"], d, config)
+  transformed["data"] =
+    flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectData(original["data"], d, config)
+  return []interface{}{transformed}
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectAspectType(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  return v
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectPath(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  return v
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectCreateTime(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  return v
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectUpdateTime(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  return v
+}
+
+func flatten{{$.GetPrefix}}{{$.TitlelizeProperty}}AspectData(v interface{}, d *schema.ResourceData, config *transport_tpg.Config) interface{} {
+  if v == nil {
+    return nil
+  }
+  b, err := json.Marshal(v)
+  if err != nil {
+    // TODO: return error once https://github.com/GoogleCloudPlatform/magic-modules/issues/3257 is fixed.
+    log.Printf("[ERROR] failed to marshal schema to JSON: %v", err)
+  }
+  return string(b)
+}

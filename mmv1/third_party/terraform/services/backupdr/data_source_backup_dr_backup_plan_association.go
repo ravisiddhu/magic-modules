@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -60,12 +61,6 @@ func DataSourceGoogleCloudBackupDRBackupPlanAssociations() *schema.Resource {
 				Optional:    true,
 				Computed:    true,
 				Description: "The ID of the project in which the resource belongs.",
-			},
-			"resource_type": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Description: `The resource type of workload on which backup plan is applied. Examples include, "compute.googleapis.com/Instance", "compute.googleapis.com/Disk".`,
-				Deprecated:  "`resource_type` is deprecated and will be removed in a future major release.",
 			},
 			"associations": {
 				Type:        schema.TypeList,
@@ -157,7 +152,7 @@ func dataSourceGoogleCloudBackupDRBackupPlanAssociationsRead(d *schema.ResourceD
 
 	location := d.Get("location").(string)
 
-	url := fmt.Sprintf("%sprojects/%s/locations/%s/backupPlanAssociations", config.BackupDRBasePath, project, location)
+	url := fmt.Sprintf("%sprojects/%s/locations/%s/backupPlanAssociations", transport_tpg.BaseUrl(Product, config), project, location)
 
 	res, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
 		Config:    config,
@@ -225,4 +220,22 @@ func flattenRulesConfigInfo(rules []interface{}) []map[string]interface{} {
 		result = append(result, flatRule)
 	}
 	return result
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_backup_dr_backup_plan_association",
+		ProductName: "backupdr",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleCloudBackupDRBackupPlanAssociation(),
+	}.Register()
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_backup_dr_backup_plan_associations",
+		ProductName: "backupdr",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleCloudBackupDRBackupPlanAssociations(),
+	}.Register()
 }

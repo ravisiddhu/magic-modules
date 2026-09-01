@@ -7,6 +7,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
+	"github.com/hashicorp/terraform-provider-google/google/services/iambeta"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 	"github.com/hashicorp/terraform-provider-google/google/verify"
@@ -26,6 +28,7 @@ func ResourceGoogleProjectIamCustomRole() *schema.Resource {
 
 		CustomizeDiff: customdiff.All(
 			tpgresource.DefaultProviderProject,
+			tpgresource.DefaultProviderDeletionPolicy("DELETE"),
 		),
 
 		Schema: map[string]*schema.Schema{
@@ -78,8 +81,26 @@ func ResourceGoogleProjectIamCustomRole() *schema.Resource {
 				Computed:    true,
 				Description: `The name of the role in the format projects/{{project}}/roles/{{role_id}}. Like id, this field can be used as a reference in other resources such as IAM role bindings.`,
 			},
+			//UDP schema start
+			"deletion_policy": tpgresource.DeletionPolicySchemaEntry("DELETE"),
+			//UDP schema end
 		},
 		UseJSONNumber: true,
+		Identity: &schema.ResourceIdentity{
+			Version: 1,
+			SchemaFunc: func() map[string]*schema.Schema {
+				return map[string]*schema.Schema{
+					"project": {
+						Type:              schema.TypeString,
+						OptionalForImport: true,
+					},
+					"role_id": {
+						Type:              schema.TypeString,
+						RequiredForImport: true,
+					},
+				}
+			},
+		},
 	}
 }
 
@@ -96,7 +117,7 @@ func resourceGoogleProjectIamCustomRoleCreate(d *schema.ResourceData, meta inter
 	}
 
 	roleId := fmt.Sprintf("projects/%s/roles/%s", project, d.Get("role_id").(string))
-	r, err := config.NewIamClient(userAgent).Projects.Roles.Get(roleId).Do()
+	r, err := iambeta.NewClient(config, userAgent).Projects.Roles.Get(roleId).Do()
 	if err == nil {
 		if r.Deleted {
 			// This role was soft-deleted; update to match new state.
@@ -112,7 +133,7 @@ func resourceGoogleProjectIamCustomRoleCreate(d *schema.ResourceData, meta inter
 		}
 	} else if err := transport_tpg.HandleNotFoundError(err, d, fmt.Sprintf("Custom Project Role %q", roleId)); err == nil {
 		// If no role is found, actually create a new role.
-		role, err := config.NewIamClient(userAgent).Projects.Roles.Create("projects/"+project, &iam.CreateRoleRequest{
+		role, err := iambeta.NewClient(config, userAgent).Projects.Roles.Create("projects/"+project, &iam.CreateRoleRequest{
 			RoleId: d.Get("role_id").(string),
 			Role: &iam.Role{
 				Title:               d.Get("title").(string),
@@ -130,6 +151,12 @@ func resourceGoogleProjectIamCustomRoleCreate(d *schema.ResourceData, meta inter
 		return fmt.Errorf("Unable to verify whether custom project role %s already exists and must be undeleted: %v", roleId, err)
 	}
 
+	if err := tpgresource.SetResourceIdentityAttributes(d, map[string]interface{}{
+		"project": project,
+		"role_id": tpgresource.GetResourceNameFromSelfLink(d.Id()),
+	}); err != nil {
+		return err
+	}
 	return resourceGoogleProjectIamCustomRoleRead(d, meta)
 }
 
@@ -148,12 +175,26 @@ func resourceGoogleProjectIamCustomRoleRead(d *schema.ResourceData, meta interfa
 
 	project := extractProjectFromProjectIamCustomRoleID(d.Id())
 
-	role, err := config.NewIamClient(userAgent).Projects.Roles.Get(d.Id()).Do()
+	role, err := iambeta.NewClient(config, userAgent).Projects.Roles.Get(d.Id()).Do()
 	if err != nil {
 		return transport_tpg.HandleNotFoundError(err, d, d.Id())
 	}
 
-	if err := d.Set("role_id", tpgresource.GetResourceNameFromSelfLink(role.Name)); err != nil {
+	if err := FlattenProjectIamCustomRole(d, role, project); err != nil {
+		return err
+	}
+
+	if err := tpgresource.DeletionPolicyReadDefault(d, config, "DELETE"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func FlattenProjectIamCustomRole(d *schema.ResourceData, role *iam.Role, project string) error {
+	roleID := tpgresource.GetResourceNameFromSelfLink(role.Name)
+
+	if err := d.Set("role_id", roleID); err != nil {
 		return fmt.Errorf("Error setting role_id: %s", err)
 	}
 	if err := d.Set("title", role.Title); err != nil {
@@ -178,10 +219,17 @@ func resourceGoogleProjectIamCustomRoleRead(d *schema.ResourceData, meta interfa
 		return fmt.Errorf("Error setting project: %s", err)
 	}
 
-	return nil
+	return tpgresource.SetResourceIdentityAttributes(d, map[string]interface{}{
+		"project": project,
+		"role_id": tpgresource.GetResourceNameFromSelfLink(role.Name),
+	})
 }
 
 func resourceGoogleProjectIamCustomRoleUpdate(d *schema.ResourceData, meta interface{}) error {
+	if tpgresource.DeletionPolicyPreUpdate(d, ResourceGoogleProjectIamCustomRole) {
+		return ResourceGoogleProjectIamCustomRole().Read(d, meta)
+	}
+
 	config := meta.(*transport_tpg.Config)
 	userAgent, err := tpgresource.GenerateUserAgentString(d, config.UserAgent)
 	if err != nil {
@@ -192,19 +240,19 @@ func resourceGoogleProjectIamCustomRoleUpdate(d *schema.ResourceData, meta inter
 
 	// We want to update the role to some undeleted state.
 	// Make sure the role with given ID exists and is un-deleted before patching.
-	r, err := config.NewIamClient(userAgent).Projects.Roles.Get(d.Id()).Do()
+	r, err := iambeta.NewClient(config, userAgent).Projects.Roles.Get(d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("unable to find custom project role %s to update: %v", d.Id(), err)
 	}
 	if r.Deleted {
-		_, err := config.NewIamClient(userAgent).Projects.Roles.Undelete(d.Id(), &iam.UndeleteRoleRequest{}).Do()
+		_, err := iambeta.NewClient(config, userAgent).Projects.Roles.Undelete(d.Id(), &iam.UndeleteRoleRequest{}).Do()
 		if err != nil {
 			return fmt.Errorf("Error undeleting the custom project role %s: %s", d.Get("title").(string), err)
 		}
 	}
 
 	if d.HasChange("title") || d.HasChange("description") || d.HasChange("stage") || d.HasChange("permissions") {
-		_, err := config.NewIamClient(userAgent).Projects.Roles.Patch(d.Id(), &iam.Role{
+		_, err := iambeta.NewClient(config, userAgent).Projects.Roles.Patch(d.Id(), &iam.Role{
 			Title:               d.Get("title").(string),
 			Description:         d.Get("description").(string),
 			Stage:               d.Get("stage").(string),
@@ -217,17 +265,31 @@ func resourceGoogleProjectIamCustomRoleUpdate(d *schema.ResourceData, meta inter
 	}
 
 	d.Partial(false)
+	project := extractProjectFromProjectIamCustomRoleID(d.Id())
+	if err := tpgresource.SetResourceIdentityAttributes(d, map[string]interface{}{
+		"project": project,
+		"role_id": tpgresource.GetResourceNameFromSelfLink(d.Id()),
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
 func resourceGoogleProjectIamCustomRoleDelete(d *schema.ResourceData, meta interface{}) error {
+
+	if ok, err := tpgresource.DeletionPolicyPreDelete(d); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+
 	config := meta.(*transport_tpg.Config)
 	userAgent, err := tpgresource.GenerateUserAgentString(d, config.UserAgent)
 	if err != nil {
 		return err
 	}
 
-	_, err = config.NewIamClient(userAgent).Projects.Roles.Delete(d.Id()).Do()
+	_, err = iambeta.NewClient(config, userAgent).Projects.Roles.Delete(d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting the custom project role %s: %s", d.Get("title").(string), err)
 	}
@@ -253,4 +315,13 @@ func resourceGoogleProjectIamCustomRoleImport(d *schema.ResourceData, meta inter
 	d.SetId(id)
 
 	return []*schema.ResourceData{d}, nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_project_iam_custom_role",
+		ProductName: "resourcemanager",
+		Type:        registry.SchemaTypeResource,
+		Schema:      ResourceGoogleProjectIamCustomRole(),
+	}.Register()
 }

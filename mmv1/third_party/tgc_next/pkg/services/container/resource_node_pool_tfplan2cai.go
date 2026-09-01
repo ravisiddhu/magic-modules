@@ -3,6 +3,7 @@ package container
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/terraform-google-conversion/v7/pkg/caiasset"
 	"github.com/GoogleCloudPlatform/terraform-google-conversion/v7/pkg/tfplan2cai/converters/cai"
@@ -13,7 +14,7 @@ import (
 	"google.golang.org/api/container/v1"
 )
 
-func NodePoolTfplan2caiConverter() cai.Tfplan2caiConverter {
+func ContainerNodePoolTfplan2caiConverter() cai.Tfplan2caiConverter {
 	return cai.Tfplan2caiConverter{
 		Convert: GetContainerNodePoolCaiObject,
 	}
@@ -21,6 +22,9 @@ func NodePoolTfplan2caiConverter() cai.Tfplan2caiConverter {
 
 func GetContainerNodePoolCaiObject(d tpgresource.TerraformResourceData, config *transport.Config) ([]caiasset.Asset, error) {
 	name, err := cai.AssetName(d, config, "//container.googleapis.com/projects/{{project}}/locations/{{location}}/clusters/{{cluster}}/nodePools/{{name}}")
+	if v, ok := d.GetOk("location"); ok && tpgresource.IsZone(v.(string)) {
+		name = strings.Replace(name, "/locations/", "/zones/", 1)
+	}
 	if err != nil {
 		return []caiasset.Asset{}, err
 	}
@@ -198,6 +202,13 @@ func expandContainerNodePoolNodeConfig(v interface{}, d tpgresource.TerraformRes
 		transformed["taints"] = transformedTaint
 	}
 
+	transformedTaintConfig, err := expandContainerNodePoolNodeConfigTaintConfig(original["taint_config"], d, config)
+	if err != nil {
+		return nil, err
+	} else if val := reflect.ValueOf(transformedTaintConfig); val.IsValid() && !tpgresource.IsEmptyValue(val) {
+		transformed["taintConfig"] = transformedTaintConfig
+	}
+
 	return transformed, nil
 }
 
@@ -281,7 +292,7 @@ func expandContainerNodePoolNodeConfigGuestAccelerator(v interface{}, d tpgresou
 }
 
 func expandContainerNodePoolNodeConfigGuestAcceleratorCount(v interface{}, d tpgresource.TerraformResourceData, config *transport.Config) (interface{}, error) {
-	return v, nil
+	return fmt.Sprintf("%d", v.(int)), nil
 }
 
 func expandContainerNodePoolNodeConfigGuestAcceleratorType(v interface{}, d tpgresource.TerraformResourceData, config *transport.Config) (interface{}, error) {
@@ -341,6 +352,28 @@ func expandContainerNodePoolNodeConfigTaintValue(v interface{}, d tpgresource.Te
 }
 
 func expandContainerNodePoolNodeConfigTaintEffect(v interface{}, d tpgresource.TerraformResourceData, config *transport.Config) (interface{}, error) {
+	return v, nil
+}
+
+func expandContainerNodePoolNodeConfigTaintConfig(v interface{}, d tpgresource.TerraformResourceData, config *transport.Config) (interface{}, error) {
+	l := v.([]interface{})
+	if len(l) == 0 || l[0] == nil {
+		return nil, nil
+	}
+	original := l[0].(map[string]interface{})
+	transformed := make(map[string]interface{})
+
+	transformedArchitectureTaintBehavior, err := expandContainerNodePoolNodeConfigTaintConfigArchitectureTaintBehavior(original["architecture_taint_behavior"], d, config)
+	if err != nil {
+		return nil, err
+	} else if val := reflect.ValueOf(transformedArchitectureTaintBehavior); val.IsValid() && !tpgresource.IsEmptyValue(val) {
+		transformed["architectureTaintBehavior"] = transformedArchitectureTaintBehavior
+	}
+
+	return transformed, nil
+}
+
+func expandContainerNodePoolNodeConfigTaintConfigArchitectureTaintBehavior(v interface{}, d tpgresource.TerraformResourceData, config *transport.Config) (interface{}, error) {
 	return v, nil
 }
 
@@ -630,6 +663,10 @@ func expandNodeNetworkConfig(v interface{}) *container.NodeNetworkConfig {
 	if v, ok := networkNodeConfig["enable_private_nodes"]; ok {
 		nnc.EnablePrivateNodes = v.(bool)
 		nnc.ForceSendFields = []string{"EnablePrivateNodes"}
+	}
+
+	if v, ok := networkNodeConfig["accelerator_network_profile"]; ok {
+		nnc.AcceleratorNetworkProfile = v.(string)
 	}
 
 	if v, ok := networkNodeConfig["additional_node_network_configs"]; ok && len(v.([]interface{})) > 0 {

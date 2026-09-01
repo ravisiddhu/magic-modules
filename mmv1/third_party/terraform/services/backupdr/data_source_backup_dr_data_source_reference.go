@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 	"google.golang.org/api/googleapi"
@@ -24,12 +25,6 @@ func DataSourceGoogleCloudBackupDRDataSourceReferences() *schema.Resource {
 				Optional:    true,
 				Computed:    true,
 				Description: "The ID of the project in which the resource belongs.",
-			},
-			"resource_type": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Description: `The resource type of workload on which backup plan is applied. Examples include, "compute.googleapis.com/Instance", "compute.googleapis.com/Disk".`,
-				Deprecated:  "`resource_type` is deprecated and will be removed in a future major release.",
 			},
 			// Output: a computed list of the data source references found
 			"data_source_references": {
@@ -97,7 +92,7 @@ func dataSourceGoogleCloudBackupDRDataSourceReferencesRead(d *schema.ResourceDat
 
 	location := d.Get("location").(string)
 
-	url := fmt.Sprintf("%sprojects/%s/locations/%s/dataSourceReferences", config.BackupDRBasePath, project, location)
+	url := fmt.Sprintf("%sprojects/%s/locations/%s/dataSourceReferences", transport_tpg.BaseUrl(Product, config), project, location)
 
 	res, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
 		Config:    config,
@@ -240,7 +235,7 @@ func dataSourceGoogleCloudBackupDRDataSourceReferenceRead(d *schema.ResourceData
 	}
 	location := d.Get("location").(string)
 	dataSourceReferenceId := d.Get("data_source_reference_id").(string)
-	url := fmt.Sprintf("%sprojects/%s/locations/%s/dataSourceReferences/%s", config.BackupDRBasePath, project, location, dataSourceReferenceId)
+	url := fmt.Sprintf("%sprojects/%s/locations/%s/dataSourceReferences/%s", transport_tpg.BaseUrl(Product, config), project, location, dataSourceReferenceId)
 	res, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
 		Config:    config,
 		Method:    "GET",
@@ -297,4 +292,22 @@ func flattenDataSourceReferenceToMap(data map[string]interface{}) (map[string]in
 		ref["resource_type"] = resourceInfo["type"]
 	}
 	return ref, nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_backup_dr_data_source_references",
+		ProductName: "backupdr",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleCloudBackupDRDataSourceReferences(),
+	}.Register()
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_backup_dr_data_source_reference",
+		ProductName: "backupdr",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleCloudBackupDRDataSourceReference(),
+	}.Register()
 }

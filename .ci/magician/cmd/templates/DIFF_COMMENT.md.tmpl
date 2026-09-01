@@ -1,13 +1,15 @@
-Hi there, I'm the Modular magician. I've detected the following information about your changes:
+Hi there, I'm the Modular magician. I've detected the following information about your changes for commit {{.CommitSHA}}:
 
 ## Diff report
 {{ $diffsLength := len .Diffs }}{{if eq $diffsLength 0 }}
 Your PR hasn't generated any diffs, but I'll let you know if a future commit does.
 {{else}}
-Your PR generated some diffs in downstreams - here they are.
+Your PR generated the following diffs in downstream repositories:
 
+| Repository | Diff Link | Changes |
+| :--- | :--- | :--- |
 {{range .Diffs -}}
-{{.Title}}: [Diff](https://github.com/modular-magician/{{.Repo}}/compare/{{.OldCommitSHA}}..{{.CommitSHA}}) ({{.ShortStat}})
+| {{.Title}} | [View Diff](https://github.com/modular-magician/{{.Repo}}/compare/{{.OldCommitSHA}}..{{.CommitSHA}}) | {{.ShortStat}} |
 {{end -}}
 {{end -}}
 
@@ -37,6 +39,20 @@ Please add an acceptance test which includes these fields. The test should inclu
 ```
 
 {{- end }}
+{{end}}
+{{- if gt (len .MissingIdentity) 0}}
+## Missing ResourceIdentity coverage
+Your PR includes resources that declare `ResourceIdentity` but are missing identity handling.
+{{ range $resourceName, $info := .MissingIdentity }}
+Resource: `{{ $resourceName }}`
+{{- if $info.MissingCRUD }}
+- Missing `SetResourceIdentityAttributes` in: {{range $i, $fn := $info.MissingCRUD}}{{if gt $i 0}}, {{end}}`{{$fn}}`{{end}}
+{{- end }}
+{{- if $info.MissingImportTest }}
+- Missing import identity test (`TestAcc..._importBlockWithResourceIdentity`)
+{{- end }}
+{{ end }}
+An `override-missing-identity` label can be added to allow merging.
 {{end}}
 
 {{if gt (len .MissingServiceLabels) 0}}

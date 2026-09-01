@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -101,31 +102,74 @@ func dataSourceGoogleComputeInterconnectLocationsRead(d *schema.ResourceData, me
 		return err
 	}
 	d.SetId(fmt.Sprintf("projects/%s", project))
-	list, err := config.NewComputeClient(userAgent).InterconnectLocations.List(project).Do()
-	if err != nil {
-		return fmt.Errorf("Error retrieving list of interconnect locations: %s", err)
-	}
+	baseURL := fmt.Sprintf("%sprojects/%s/global/interconnectLocations", transport_tpg.BaseUrl(Product, config), project)
+
 	var locations []map[string]interface{}
-	for _, location := range list.Items {
-		locations = append(locations, map[string]interface{}{
-			"name":                          location.Name,
-			"description":                   location.Description,
-			"self_link":                     location.SelfLink,
-			"peeringdb_facility_id":         location.PeeringdbFacilityId,
-			"address":                       location.Address,
-			"facility_provider":             location.FacilityProvider,
-			"facility_provider_facility_id": location.FacilityProviderFacilityId,
-			"status":                        location.Status,
-			"continent":                     location.Continent,
-			"city":                          location.City,
-			"availability_zone":             location.AvailabilityZone,
-			"supports_pzs":                  location.SupportsPzs,
-			"available_features":            location.AvailableFeatures,
-			"available_link_types":          location.AvailableLinkTypes,
+	pageToken := ""
+	for {
+		// The previous typed-client call sent no query parameters, so the first
+		// request stays parameter-free. pageToken is only added for later pages.
+		params := map[string]string{}
+		if pageToken != "" {
+			params["pageToken"] = pageToken
+		}
+		url, err := transport_tpg.AddQueryParams(baseURL, params)
+		if err != nil {
+			return err
+		}
+
+		res, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
+			Config:    config,
+			Method:    "GET",
+			Project:   project,
+			RawURL:    url,
+			UserAgent: userAgent,
 		})
+		if err != nil {
+			return fmt.Errorf("Error retrieving list of interconnect locations: %s", err)
+		}
+
+		if items, ok := res["items"].([]interface{}); ok {
+			for _, raw := range items {
+				location, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				locations = append(locations, map[string]interface{}{
+					"name":                          location["name"],
+					"description":                   location["description"],
+					"self_link":                     location["selfLink"],
+					"peeringdb_facility_id":         location["peeringdbFacilityId"],
+					"address":                       location["address"],
+					"facility_provider":             location["facilityProvider"],
+					"facility_provider_facility_id": location["facilityProviderFacilityId"],
+					"status":                        location["status"],
+					"continent":                     location["continent"],
+					"city":                          location["city"],
+					"availability_zone":             location["availabilityZone"],
+					"supports_pzs":                  location["supportsPzs"],
+					"available_features":            location["availableFeatures"],
+					"available_link_types":          location["availableLinkTypes"],
+				})
+			}
+		}
+
+		pageToken, _ = res["nextPageToken"].(string)
+		if pageToken == "" {
+			break
+		}
 	}
 	if err := d.Set("locations", locations); err != nil {
 		return fmt.Errorf("Error setting locations: %s", err)
 	}
 	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_compute_interconnect_locations",
+		ProductName: "compute",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleComputeInterconnectLocations(),
+	}.Register()
 }

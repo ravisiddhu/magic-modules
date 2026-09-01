@@ -61,41 +61,27 @@ var (
 
 	// This is for the random-assignee rotation.
 	reviewerRotation = map[string]ReviewerConfig{
-		"BBBmau": {
-			vacations: []Vacation{
-				{
-					startDate: newDate(2025, 7, 1),
-					endDate:   newDate(2025, 7, 17),
-				},
-			},
-		},
 		"c2thorn": {
 			vacations: []Vacation{
 				{
 					startDate: newDate(2025, 12, 3),
 					endDate:   newDate(2025, 12, 15),
 				},
+				{
+					startDate: newDate(2026, 4, 19),
+					endDate:   newDate(2026, 4, 26),
+				},
+				{
+					startDate: newDate(2026, 7, 10),
+					endDate:   newDate(2026, 7, 17),
+				},
 			},
-		},
-		"hao-nan-li": {
-			vacations: []Vacation{},
-		},
-		"malhotrasagar2212": {
-			vacations: []Vacation{},
 		},
 		"melinath": {
 			vacations: []Vacation{
 				{
-					startDate: newDate(2025, 12, 18),
-					endDate:   newDate(2026, 1, 6),
-				},
-			},
-		},
-		"NickElliot": {
-			vacations: []Vacation{
-				{
-					startDate: newDate(2025, 10, 22),
-					endDate:   newDate(2025, 10, 28),
+					startDate: newDate(2026, 6, 26),
+					endDate:   newDate(2026, 7, 6),
 				},
 			},
 		},
@@ -109,69 +95,61 @@ var (
 					startDate: newDate(2025, 11, 11),
 					endDate:   newDate(2025, 11, 24),
 				},
+				{
+					startDate: newDate(2026, 04, 14),
+					endDate:   newDate(2026, 04, 19),
+				},
+				{
+					startDate: newDate(2026, 05, 14),
+					endDate:   newDate(2026, 05, 25),
+				},
+				{
+					startDate: newDate(2026, 06, 01),
+					endDate:   newDate(2026, 06, 12),
+				},
+				{
+					startDate: newDate(2026, 06, 29),
+					endDate:   newDate(2026, 07, 06),
+				},
 			},
 		},
 		"roaks3": {
 			vacations: []Vacation{
 				{
-					startDate: newDate(2025, 8, 1),
-					endDate:   newDate(2025, 8, 11),
+					startDate: newDate(2026, 5, 7),
+					endDate:   newDate(2026, 5, 11),
 				},
 				{
-					startDate: newDate(2025, 9, 23),
-					endDate:   newDate(2025, 9, 29),
+					startDate: newDate(2026, 7, 5),
+					endDate:   newDate(2026, 8, 17),
 				},
 			},
 		},
 		"ScottSuarez": {
 			vacations: []Vacation{
 				{
-					startDate: newDate(2025, 12, 5),
-					endDate:   newDate(2025, 12, 15),
-				},
-			},
-		},
-		"shuyama1": {
-			vacations: []Vacation{
-				{
-					startDate: newDate(2026, 01, 29),
-					endDate:   newDate(2026, 02, 04),
+					startDate: newDate(2026, 4, 4),
+					endDate:   newDate(2026, 7, 5),
 				},
 			},
 		},
 		"SirGitsalot": {
 			vacations: []Vacation{
 				{
-					startDate: newDate(2026, 1, 18),
-					endDate:   newDate(2026, 1, 27),
+					startDate: newDate(2026, 4, 8),
+					endDate:   newDate(2026, 4, 15),
+				},
+				{
+					startDate: newDate(2026, 06, 01),
+					endDate:   newDate(2026, 06, 12),
 				},
 			},
 		},
 		"slevenick": {
 			vacations: []Vacation{
 				{
-					startDate: newDate(2025, 5, 22),
-					endDate:   newDate(2025, 6, 7),
-				},
-			},
-		},
-		"trodge": {
-			vacations: []Vacation{
-				{
-					startDate: newDate(2025, 8, 7),
-					endDate:   newDate(2025, 8, 10),
-				},
-				{
-					startDate: newDate(2025, 9, 18),
-					endDate:   newDate(2025, 9, 28),
-				},
-			},
-		},
-		"zli82016": {
-			vacations: []Vacation{
-				{
-					startDate: newDate(2025, 8, 27),
-					endDate:   newDate(2025, 9, 2),
+					startDate: newDate(2026, 5, 7),
+					endDate:   newDate(2026, 5, 12),
 				},
 			},
 		},
@@ -179,6 +157,15 @@ var (
 
 	// This is for new team members who are onboarding
 	trustedContributors = map[string]struct{}{
-		"bbasata": struct{}{},
+		"BBBmau":            {},
+		"malhotrasagar2212": {},
+		"bbasata":           {},
+		"tavasyag":          {},
+		"hao-nan-li":        {},
+		"NickElliot":        {},
+		"shuyama1":          {},
+		"trodge":            {},
+		"zli82016":          {},
+		"vr-ibm":            {},
 	}
 )

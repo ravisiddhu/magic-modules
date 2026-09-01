@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -45,15 +46,28 @@ func dataSourceGoogleComputeNetworksRead(d *schema.ResourceData, meta interface{
 		return err
 	}
 
-	networkList, err := config.NewComputeClient(userAgent).Networks.List(project).Do()
+	url := fmt.Sprintf("%sprojects/%s/global/networks", transport_tpg.BaseUrl(Product, config), project)
+	networkList, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
+		Config:    config,
+		Method:    "GET",
+		Project:   project,
+		RawURL:    url,
+		UserAgent: userAgent,
+	})
 	if err != nil {
 		return transport_tpg.HandleNotFoundError(err, d, fmt.Sprintf("Network Not Found : %s", project))
 	}
 
-	var networks = make([]string, len(networkList.Items))
-
-	for i := 0; i < len(networkList.Items); i++ {
-		networks[i] = networkList.Items[i].Name
+	var networks []string
+	if rawItems, ok := networkList["items"].([]interface{}); ok {
+		networks = make([]string, len(rawItems))
+		for i, raw := range rawItems {
+			network, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			networks[i], _ = network["name"].(string)
+		}
 	}
 
 	if err := d.Set("networks", networks); err != nil {
@@ -64,10 +78,20 @@ func dataSourceGoogleComputeNetworksRead(d *schema.ResourceData, meta interface{
 		return fmt.Errorf("Error setting the network names: %s", err)
 	}
 
-	if err := d.Set("self_link", networkList.SelfLink); err != nil {
+	selfLink, _ := networkList["selfLink"].(string)
+	if err := d.Set("self_link", selfLink); err != nil {
 		return fmt.Errorf("Error setting self_link: %s", err)
 	}
 
 	d.SetId(fmt.Sprintf("projects/%s/global/networks", project))
 	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_compute_networks",
+		ProductName: "compute",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleComputeNetworks(),
+	}.Register()
 }

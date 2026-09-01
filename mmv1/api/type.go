@@ -237,10 +237,6 @@ type Type struct {
 	// The name of the key. Used in the Terraform schema as a field name.
 	KeyName string `yaml:"key_name,omitempty"`
 
-	// Deprecated. A description of the key's format. Used in Terraform to describe
-	// the field in documentation.
-	KeyDescription string `yaml:"key_description,omitempty"`
-
 	// ====================
 	// KeyValuePairs Fields
 	// ====================
@@ -528,10 +524,6 @@ func (t *Type) Validate(rName string) (es []error) {
 		es = append(es, fmt.Errorf("property %s cannot be write_only and sensitive at the same time in resource %s", fullFieldPath, rName))
 	}
 
-	if t.KeyDescription != "" {
-		es = append(es, fmt.Errorf("property %s key_description can't be set in resource %s; it's deprecated", fullFieldPath, rName))
-	}
-
 	t.validateLabelsField()
 
 	switch {
@@ -552,6 +544,11 @@ func (t *Type) Validate(rName string) (es []error) {
 			es = append(es, p.Validate(rName)...)
 		}
 	default:
+	}
+
+	// UpdateMask isn't supported on nested fields: https://github.com/hashicorp/terraform-provider-google/issues/26382
+	if t.ParentMetadata != nil && !t.ParentMetadata.FlattenObject && len(t.UpdateMaskFields) > 0 {
+		es = append(es, fmt.Errorf("property %s cannot set update_mask_fields because it is nested in resource %s", fullFieldPath, rName))
 	}
 
 	return es
@@ -587,8 +584,19 @@ func (t Type) Lineage() []string {
 // include the field on the API resource that the fine-grained resource manages.
 func (t Type) ApiLineage() []string {
 	if t.ParentMetadata == nil {
-		if !t.UrlParamOnly && t.ResourceMetadata.ApiResourceField != "" {
-			return []string{t.ResourceMetadata.ApiResourceField, t.ApiName}
+		// The special value "." indicates that the resource's shouldn't be considered "nested"
+		// even if it has NestedQuery set.
+		if !t.UrlParamOnly && t.ResourceMetadata.ApiResourceField != "." {
+			if t.ResourceMetadata.ApiResourceField != "" {
+				return []string{t.ResourceMetadata.ApiResourceField, t.ApiName}
+			} else if t.ResourceMetadata.NestedQuery != nil {
+				// Handle `items` as a special case since that's a common container field name for a list endpoint,
+				// not a fine-grained field name within a resource.
+				keys := t.ResourceMetadata.NestedQuery.Keys
+				if len(keys) > 1 || keys[0] != "items" {
+					return append(t.ResourceMetadata.NestedQuery.Keys, t.ApiName)
+				}
+			}
 		}
 		return []string{t.ApiName}
 	}
@@ -699,17 +707,7 @@ func (t Type) FWResourceType() string {
 // check :default_value, type: clazz
 // }
 
-// Checks that all conflicting properties actually exist.
-// This currently just returns if empty, because we don't want to do the check, since
-// this list will have a full path for nested attributes.
-// func (t *Type) check_conflicts() {
-// check :conflicts, type: ::Array, default: [], item_type: ::String
-
-// return if @conflicts.empty?
-// }
-
 // Returns list of properties that are in conflict with this property.
-// func (t *Type) conflicting() {
 func (t Type) Conflicting() []string {
 	if t.ResourceMetadata == nil {
 		return []string{}
@@ -720,18 +718,7 @@ func (t Type) Conflicting() []string {
 	return t.Conflicts
 }
 
-// TODO rewrite: validation
-// Checks that all properties that needs at least one of their fields actually exist.
-// This currently just returns if empty, because we don't want to do the check, since
-// this list will have a full path for nested attributes.
-// func (t *Type) check_at_least_one_of() {
-// check :at_least_one_of, type: ::Array, default: [], item_type: ::String
-
-// return if @at_least_one_of.empty?
-// }
-
 // Returns list of properties that needs at least one of their fields set.
-// func (t *Type) at_least_one_of_list() {
 func (t Type) AtLeastOneOfList() []string {
 	if t.ResourceMetadata == nil {
 		return []string{}
@@ -742,18 +729,7 @@ func (t Type) AtLeastOneOfList() []string {
 	return t.AtLeastOneOf
 }
 
-// TODO rewrite: validation
-// Checks that all properties that needs exactly one of their fields actually exist.
-// This currently just returns if empty, because we don't want to do the check, since
-// this list will have a full path for nested attributes.
-// func (t *Type) check_exactly_one_of() {
-// check :exactly_one_of, type: ::Array, default: [], item_type: ::String
-
-// return if @exactly_one_of.empty?
-// }
-
 // Returns list of properties that needs exactly one of their fields set.
-// func (t *Type) exactly_one_of_list() {
 func (t Type) ExactlyOneOfList() []string {
 	if t.ResourceMetadata == nil {
 		return []string{}
@@ -763,16 +739,6 @@ func (t Type) ExactlyOneOfList() []string {
 	}
 	return t.ExactlyOneOf
 }
-
-// TODO rewrite: validation
-// Checks that all properties that needs required with their fields actually exist.
-// This currently just returns if empty, because we don't want to do the check, since
-// this list will have a full path for nested attributes.
-// func (t *Type) check_required_with() {
-// check :required_with, type: ::Array, default: [], item_type: ::String
-
-// return if @required_with.empty?
-// }
 
 // Returns list of properties that needs required with their fields set.
 func (t Type) RequiredWithList() []string {
@@ -1514,25 +1480,29 @@ func (t *Type) ProviderOnly() bool {
 func (t *Type) GetPropertySchemaPath(schemaPath string) string {
 	nestedProps := t.ResourceMetadata.UserProperites()
 
+	pathSegments := strings.Split(schemaPath, ".0.")
 	var pathTkns []string
-	for _, pname := range strings.Split(schemaPath, ".0.") {
+	for i, pname := range pathSegments {
 		camelPname := google.Camelize(pname, "lower")
-		index := slices.IndexFunc(nestedProps, func(p *Type) bool {
-			return p.Name == camelPname
-		})
+		prop := findPropByNameInFlattenedList(nestedProps, camelPname)
 
 		// if we couldn't find it, see if it was renamed at the top level
-		if index == -1 {
-			index = slices.IndexFunc(nestedProps, func(p *Type) bool {
-				return p.Name == schemaPath
-			})
+		if prop == nil {
+			prop = findPropByNameInFlattenedList(nestedProps, schemaPath)
 		}
 
-		if index == -1 {
+		if prop == nil {
 			return ""
 		}
 
-		prop := nestedProps[index]
+		// Terraform SDK rejects ExactlyOneOf/ConflictsWith/etc. paths that
+		// traverse an unbounded TypeList (TypeArray without MaxSize:1) as an
+		// intermediate segment. The terminal segment itself may be any type, so
+		// only apply this guard to non-final path tokens.
+		isIntermediate := i < len(pathSegments)-1
+		if isIntermediate && prop.IsA("Array") && (prop.MaxSize == nil || *prop.MaxSize != 1) {
+			return ""
+		}
 
 		nestedProps = prop.NestedProperties()
 		if !prop.FlattenObject {
@@ -1545,6 +1515,23 @@ func (t *Type) GetPropertySchemaPath(schemaPath string) string {
 	}
 
 	return strings.Join(pathTkns[:], ".0.")
+}
+
+// findPropByNameInFlattenedList searches for a property by camelCase name in a
+// list of properties. It also searches recursively inside any FlattenObject
+// nested objects, since those appear as top-level fields in the Terraform schema.
+func findPropByNameInFlattenedList(props []*Type, name string) *Type {
+	for _, p := range props {
+		if p.Name == name {
+			return p
+		}
+		if p.FlattenObject {
+			if found := findPropByNameInFlattenedList(p.UserProperties(), name); found != nil {
+				return found
+			}
+		}
+	}
+	return nil
 }
 
 func (t Type) GetPropertySchemaPathList(propertyList []string) []string {

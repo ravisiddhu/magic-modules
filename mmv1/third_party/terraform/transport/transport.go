@@ -27,6 +27,9 @@ type SendRequestOptions struct {
 	Headers              http.Header
 	ErrorRetryPredicates []RetryErrorPredicateFunc
 	ErrorAbortPredicates []RetryErrorPredicateFunc
+	// RPC related opts
+	Product    string
+	RPCService string
 }
 
 func SendRequest(opt SendRequestOptions) (map[string]interface{}, error) {
@@ -118,6 +121,110 @@ func SendRequest(opt SendRequestOptions) (map[string]interface{}, error) {
 	return result, nil
 }
 
+func SendRequestRPC(opt SendRequestOptions) (map[string]interface{}, error) {
+	if opt.Config == nil || opt.Config.Client == nil {
+		return nil, fmt.Errorf("http client is nil for request to rpc proxy")
+	}
+	if opt.Product == "" || opt.Config.RPCClients[opt.Product] == nil {
+		return nil, fmt.Errorf("rpc client is nil for request to rpc proxy; product is %q", opt.Product)
+	}
+
+	reqHeaders := opt.Headers
+	if reqHeaders == nil {
+		reqHeaders = make(http.Header)
+	}
+	reqHeaders.Set("User-Agent", opt.UserAgent)
+	reqHeaders.Set("Content-Type", "application/json")
+
+	if opt.Timeout == 0 {
+		opt.Timeout = DefaultRequestTimeout
+	}
+
+	var res *http.Response
+	err := Retry(RetryOptions{
+		RetryFunc: func() error {
+			var reqJsonStr string
+			if opt.Body != nil {
+				b, err := json.Marshal(opt.Body)
+				if err != nil {
+					return err
+				}
+				reqJsonStr = string(b)
+			}
+
+			reqBody := map[string]interface{}{
+				"targetAddress": opt.Config.RPCClients[opt.Product].Address,
+				"packageName":   opt.Config.RPCClients[opt.Product].Package,
+				"serviceName":   opt.RPCService,
+				"methodName":    opt.Method,
+				"requestJson":   reqJsonStr,
+			}
+
+			var buf bytes.Buffer
+			if reqBody != nil {
+				err := json.NewEncoder(&buf).Encode(reqBody)
+				if err != nil {
+					return err
+				}
+			}
+
+			req, err := http.NewRequest("POST", opt.Config.RPCClients[opt.Product].ProxyAddress+"/handleRPC", &buf)
+			if err != nil {
+				return err
+			}
+
+			req.Header = reqHeaders
+			res, err = opt.Config.Client.Do(req)
+			if err != nil {
+				return err
+			}
+
+			if err := googleapi.CheckResponse(res); err != nil {
+				googleapi.CloseBody(res)
+				return err
+			}
+
+			return nil
+		},
+		Timeout:              opt.Timeout,
+		ErrorRetryPredicates: opt.ErrorRetryPredicates,
+		ErrorAbortPredicates: opt.ErrorAbortPredicates,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if res == nil {
+		return nil, fmt.Errorf("Unable to parse server response. This is most likely a terraform problem, please file a bug at https://github.com/hashicorp/terraform-provider-google/issues.")
+	}
+
+	// The defer call must be made outside of the retryFunc otherwise it's closed too soon.
+	defer googleapi.CloseBody(res)
+
+	// 204 responses will have no body, so we're going to error with "EOF" if we
+	// try to parse it. Instead, we can just return nil.
+	if res.StatusCode == 204 {
+		return nil, nil
+	}
+	var proxyResult map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&proxyResult); err != nil {
+		return nil, err
+	}
+
+	if errMsg, ok := proxyResult["errorMessage"].(string); ok && errMsg != "" {
+		return nil, fmt.Errorf("RPC proxy returned error: %s", errMsg)
+	}
+
+	var result map[string]interface{}
+	if respJsonStr, ok := proxyResult["responseJson"].(string); ok && respJsonStr != "" {
+		if err := json.Unmarshal([]byte(respJsonStr), &result); err != nil {
+			return nil, fmt.Errorf("Failed to unmarshal responseJson from proxy: %v", err)
+		}
+	}
+
+	return result, nil
+}
+
 func AddQueryParams(rawurl string, params map[string]string) (string, error) {
 	u, err := url.Parse(rawurl)
 	if err != nil {
@@ -166,6 +273,15 @@ func HandleDataSourceNotFoundError(err error, d *schema.ResourceData, resource, 
 		fmt.Sprintf("Error when reading or editing %s: {{err}}", resource), err)
 }
 
+func HandleListGoogleApiError(err error, url string) error {
+	if IsGoogleApiErrorWithCode(err, 404) {
+		return fmt.Errorf("list at %s not found: %w", url, err)
+	}
+
+	return errwrap.Wrapf(
+		fmt.Sprintf("Error when reading list at %s: {{err}}", url), err)
+}
+
 func IsGoogleApiErrorWithCode(err error, errCode int) bool {
 	gerr, ok := errwrap.GetType(err, &googleapi.Error{}).(*googleapi.Error)
 	return ok && gerr != nil && gerr.Code == errCode
@@ -188,4 +304,192 @@ func IsApiNotEnabledError(err error) bool {
 		}
 	}
 	return false
+}
+
+type ListPagesOptions struct {
+	Config         *Config
+	TempData       *schema.ResourceData
+	Resource       *schema.Resource
+	ListURL        string
+	BillingProject string
+	UserAgent      string
+	ItemName       string
+	Filter         string
+	Flattener      func(item map[string]interface{}, d *schema.ResourceData, config *Config) error
+	Callback       func(rd *schema.ResourceData) error
+}
+
+// ListPages performs a paginated GET request against ListURL and processes each item in the
+// response. Rate-limited responses (HTTP 429) are retried automatically.
+//
+// On each page the function extracts the array at the JSON key ItemName (default "items"),
+// calls Flattener to write each element into TempData, then invokes Callback for further
+// processing of each item.
+func ListPages(opt ListPagesOptions) error {
+	params := make(map[string]string)
+	if opt.Filter != "" {
+		params["filter"] = opt.Filter
+	}
+
+	for {
+		// Depending on previous iterations, params might contain a pageToken param
+		url, err := AddQueryParams(opt.ListURL, params)
+		if err != nil {
+			return err
+		}
+
+		headers := make(http.Header)
+		res, err := SendRequest(SendRequestOptions{
+			Config:    opt.Config,
+			Method:    "GET",
+			Project:   opt.BillingProject,
+			RawURL:    url,
+			UserAgent: opt.UserAgent,
+			Headers:   headers,
+			// ErrorRetryPredicates used to allow retrying if rate limits are hit when requesting multiple pages in a row
+			ErrorRetryPredicates: []RetryErrorPredicateFunc{Is429RetryableQuotaError},
+		})
+		if err != nil {
+			return HandleListGoogleApiError(err, url)
+		}
+
+		items, ok := res[opt.ItemName].([]interface{})
+		if !ok && opt.ItemName != "items" {
+			items, ok = res["items"].([]interface{})
+		}
+		if ok {
+			// Capture the seed state once per page. State() returns a snapshot, so reads
+			// here are unaffected by anything the flattener writes on prior iterations.
+			seedState := opt.TempData.State()
+			for _, item := range items {
+				itemMap, ok := item.(map[string]interface{})
+				if !ok {
+					return fmt.Errorf("expected item to be map[string]interface{}, got %T", item)
+				}
+
+				itemResourceData := opt.Resource.Data(seedState)
+				if err := opt.Flattener(itemMap, itemResourceData, opt.Config); err != nil {
+					return fmt.Errorf("Error flattening instance: %s", err)
+				}
+				if err := opt.Callback(itemResourceData); err != nil {
+					return err
+				}
+			}
+		}
+		// Handle pagination for next loop, or break loop
+		v, ok := res["nextPageToken"]
+		if ok {
+			params["pageToken"] = v.(string)
+		}
+		if !ok {
+			break
+		}
+	}
+	return nil
+}
+
+func listItemAsMap(item interface{}) (map[string]interface{}, error) {
+	switch v := item.(type) {
+	case map[string]interface{}:
+		return v, nil
+	case string:
+		// Apigee keyvaluemaps list returns ["kvm1", "kvm2", ...]
+		return map[string]interface{}{"name": v}, nil
+	default:
+		return nil, fmt.Errorf("expected item to be map[string]interface{} or string, got %T", item)
+	}
+}
+
+type ListArrayPagesOptions struct {
+	Config         *Config
+	TempData       *schema.ResourceData
+	Resource       *schema.Resource
+	ListURL        string
+	BillingProject string
+	UserAgent      string
+	Flattener      func(item map[string]interface{}, d *schema.ResourceData, config *Config) error
+	Callback       func(rd *schema.ResourceData) error
+}
+
+// ListArrayPages performs a GET against ListURL where the response body is a
+// top-level JSON array (not a wrapped object). String elements are coerced to
+// {"name": value} so the same flattener path as ListPages can run.
+func ListArrayPages(opt ListArrayPagesOptions) error {
+	if opt.Config == nil || opt.Config.Client == nil {
+		return fmt.Errorf("client is nil for list request to %s", opt.ListURL)
+	}
+
+	url, err := AddQueryParams(opt.ListURL, map[string]string{})
+	if err != nil {
+		return err
+	}
+
+	reqHeaders := make(http.Header)
+	reqHeaders.Set("User-Agent", opt.UserAgent)
+	reqHeaders.Set("Content-Type", "application/json")
+	if opt.Config.UserProjectOverride && opt.BillingProject != "" {
+		if opt.BillingProject == "NO_BILLING_PROJECT_OVERRIDE" {
+			reqHeaders.Set("X-Goog-User-Project", "")
+		} else {
+			reqHeaders.Set("X-Goog-User-Project", opt.BillingProject)
+		}
+	}
+
+	var res *http.Response
+	err = Retry(RetryOptions{
+		RetryFunc: func() error {
+			u, err := AddQueryParams(url, map[string]string{"alt": "json"})
+			if err != nil {
+				return err
+			}
+			req, err := http.NewRequest("GET", u, nil)
+			if err != nil {
+				return err
+			}
+			req.Header = reqHeaders
+			res, err = opt.Config.Client.Do(req)
+			if err != nil {
+				return err
+			}
+			if err := googleapi.CheckResponse(res); err != nil {
+				googleapi.CloseBody(res)
+				return err
+			}
+			return nil
+		},
+		Timeout:              DefaultRequestTimeout,
+		ErrorRetryPredicates: []RetryErrorPredicateFunc{Is429RetryableQuotaError},
+	})
+	if err != nil {
+		return HandleListGoogleApiError(err, url)
+	}
+	if res == nil {
+		return fmt.Errorf("unable to parse server response for list at %s", url)
+	}
+	defer googleapi.CloseBody(res)
+
+	if res.StatusCode == 204 {
+		return nil
+	}
+
+	var items []interface{}
+	if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+		return fmt.Errorf("error decoding array response from %s: %w", url, err)
+	}
+
+	seedState := opt.TempData.State()
+	for _, item := range items {
+		itemMap, err := listItemAsMap(item)
+		if err != nil {
+			return err
+		}
+		itemResourceData := opt.Resource.Data(seedState)
+		if err := opt.Flattener(itemMap, itemResourceData, opt.Config); err != nil {
+			return fmt.Errorf("error flattening instance: %s", err)
+		}
+		if err := opt.Callback(itemResourceData); err != nil {
+			return err
+		}
+	}
+	return nil
 }

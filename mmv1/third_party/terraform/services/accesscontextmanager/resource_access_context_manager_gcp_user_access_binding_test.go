@@ -10,6 +10,8 @@ import (
 
 	"github.com/hashicorp/terraform-provider-google/google/acctest"
 	"github.com/hashicorp/terraform-provider-google/google/envvar"
+	"github.com/hashicorp/terraform-provider-google/google/services/accesscontextmanager"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/cloudidentity"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 )
@@ -100,6 +102,9 @@ resource "google_access_context_manager_gcp_user_access_binding" "gcp_user_acces
   access_levels   = [
     google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
   ]
+  dry_run_access_levels = [
+    google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+  ]
   session_settings {
     session_length = "3600s"
     session_length_enabled = true
@@ -110,26 +115,26 @@ resource "google_access_context_manager_gcp_user_access_binding" "gcp_user_acces
     scope {
       client_scope {
         restricted_client_application {
-	        client_id = "TEST_APPLICATION"
+          client_id = "TEST_APPLICATION"
          }
       }
     }
     active_settings {
-  	  access_levels = [
-  		  google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
-  	  ]
-  	  session_settings {
-  		  session_length = "3600s"
-  		  session_length_enabled = true
-  		  session_reauth_method = "LOGIN"
-  		  use_oidc_max_age = false
-  	  }
-  	}
-  	dry_run_settings {
-  	  access_levels = [
-  		  google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
-  	  ]
-  	}
+      access_levels = [
+        google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+      ]
+      session_settings {
+        session_length = "3600s"
+        session_length_enabled = true
+        session_reauth_method = "LOGIN"
+        use_oidc_max_age = false
+      }
+    }
+    dry_run_settings {
+      access_levels = [
+        google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+      ]
+    }
   }
 }
 `, context)
@@ -191,27 +196,27 @@ resource "google_access_context_manager_gcp_user_access_binding" "gcp_user_acces
     scope {
       client_scope {
         restricted_client_application {
-	        name = "Cloud Console"
+          name = "Cloud Console"
          }
       }
     }
     active_settings {
-  	  access_levels = [
-  		  google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
-  	  ]
-  	  session_settings {
-  		  max_inactivity = "400s"
-  		  session_length = "3600s"
-  		  session_length_enabled = true
-  		  session_reauth_method = "LOGIN"
-  		  use_oidc_max_age = false
-  	  }
-  	}
-  	dry_run_settings {
-  	  access_levels = [
-  		  google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
-  	  ]
-  	}
+      access_levels = [
+        google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+      ]
+      session_settings {
+        max_inactivity = "400s"
+        session_length = "3600s"
+        session_length_enabled = true
+        session_reauth_method = "LOGIN"
+        use_oidc_max_age = false
+      }
+    }
+    dry_run_settings {
+      access_levels = [
+        google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+      ]
+    }
   }
 }
 `, context)
@@ -229,7 +234,7 @@ func testAccCheckAccessContextManagerGcpUserAccessBindingDestroyProducer(t *test
 
 			config := acctest.GoogleProviderConfig(t)
 
-			url, err := tpgresource.ReplaceVarsForTest(config, rs, "{{AccessContextManagerBasePath}}organizations/{{organization_id}}/gcpUserAccessBindings/{{name}}")
+			url, err := tpgresource.ReplaceVarsForTest(config, rs, transport_tpg.BaseUrl(accesscontextmanager.Product, config)+"organizations/{{organization_id}}/gcpUserAccessBindings/{{name}}")
 			if err != nil {
 				return err
 			}
@@ -247,4 +252,73 @@ func testAccCheckAccessContextManagerGcpUserAccessBindingDestroyProducer(t *test
 
 		return nil
 	}
+}
+
+func testAccAccessContextManagerGcpUserAccessBinding_principalTest(t *testing.T) {
+	t.Parallel()
+
+	context := map[string]interface{}{
+		"org_id":        envvar.GetTestOrgFromEnv(t),
+		"random_suffix": acctest.RandString(t, 10),
+	}
+
+	acctest.VcrTest(t, resource.TestCase{
+		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
+		CheckDestroy:             testAccCheckAccessContextManagerGcpUserAccessBindingDestroyProducer(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAccessContextManagerGcpUserAccessBinding_accessContextManagerGcpUserAccessBindingPrincipalExample(context),
+			},
+			{
+				ResourceName:            "google_access_context_manager_gcp_user_access_binding.gcp_user_access_binding",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"organization_id"},
+			},
+		},
+	})
+}
+
+func testAccAccessContextManagerGcpUserAccessBinding_accessContextManagerGcpUserAccessBindingPrincipalExample(context map[string]interface{}) string {
+	return acctest.Nprintf(`
+resource "google_service_account" "test_sa" {
+  account_id   = "tf-test-sa-%{random_suffix}"
+  display_name = "Test Service Account for User Access Binding"
+}
+
+resource "google_access_context_manager_access_level" "tf_test_access_level_id_for_user_access_binding%{random_suffix}" {
+  parent = "accessPolicies/${google_access_context_manager_access_policy.access-policy.name}"
+  name   = "accessPolicies/${google_access_context_manager_access_policy.access-policy.name}/accessLevels/tf_test_chromeos_no_lock%{random_suffix}"
+  title  = "tf_test_chromeos_no_lock%{random_suffix}"
+  basic {
+    conditions {
+      device_policy {
+        require_screen_lock = true
+        os_constraints {
+          os_type = "DESKTOP_CHROME_OS"
+        }
+      }
+      regions = [
+        "US",
+      ]
+    }
+  }
+}
+
+resource "google_access_context_manager_access_policy" "access-policy" {
+  parent = "organizations/%{org_id}"
+  title  = "my policy"
+}
+
+resource "google_access_context_manager_gcp_user_access_binding" "gcp_user_access_binding" {
+  organization_id = "%{org_id}"
+  principal {
+    service_account = google_service_account.test_sa.email
+  }
+  access_levels   = [
+    google_access_context_manager_access_level.tf_test_access_level_id_for_user_access_binding%{random_suffix}.name,
+  ]
+}
+`, context)
 }

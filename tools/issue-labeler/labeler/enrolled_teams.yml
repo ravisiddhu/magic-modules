@@ -7,15 +7,27 @@ service/accessapproval:
 service/accesscontextmanager:
   resources:
   - google_access_context_manager_.*
+service/agentidentity:
+  resources:
+  - google_agent_identity_.*
+service/agentregistry:
+  resources:
+  - google_agent_registry_.*
+service/aiplatform-agent-anomaly-detection:
+  resources:
+  - google_vertex_ai_agent_anomaly_detection_.*
 service/aiplatform-agent-engine:
   resources:
-  - google_vertex_ai_reasoning_engine
+  - google_vertex_ai_reasoning_engine.*
 service/aiplatform-colab-enterprise:
   resources:
   - google_colab_.*
 service/aiplatform-dataset:
   resources:
   - google_vertex_ai_dataset
+service/aiplatform-evaluation:
+  resources:
+  - google_vertex_ai_evaluation_.*
 service/aiplatform-featurestore:
   resources:
   - google_vertex_ai_featurestore.*
@@ -32,14 +44,17 @@ service/aiplatform-prediction:
   - google_vertex_ai_cache_config
   - google_vertex_ai_endpoint
   - google_vertex_ai_deployment_resource_pool
-  - google_ml_engine_model
   - google_vertex_ai_endpoint_with_model_garden_deployment
+  - google_vertex_ai_model_garden_enable_model
 service/aiplatform-rag-engine:
   resources:
   - google_vertex_ai_rag_engine_config
+service/aiplatform-semantic-governance:
+  resources:
+  - google_vertex_ai_semantic_governance.*
 service/aiplatform-tensorboard:
   resources:
-  - google_vertex_ai_tensorboard
+  - google_vertex_ai_tensorboard.*
 service/alloydb:
   resources:
   - google_alloydb_.*
@@ -119,7 +134,6 @@ service/cloudbilling:
 service/cloudbuild:
   resources:
   - google_cloudbuild_.*
-  - google_cloudbuildv2_.*
 service/clouddeploy:
   resources:
   - google_clouddeploy_.*
@@ -133,6 +147,10 @@ service/cloudfunctions:
 service/cloudidentity-groups:
   resources:
   - google_cloud_identity_group.*
+service/cloudidentity-policy:
+  resources:
+  - google_cloud_identity_policy
+  - google_cloud_identity_policies
 service/cloudkms:
   resources:
   - google_kms_.*
@@ -165,6 +183,9 @@ service/cloudscheduler:
 service/cloudsecuritycompliance:
   resources:
   - google_cloud_security_compliance_.*
+service/cloudsupport:
+  resources:
+  - google_cloud_support_.*
 service/cloudtasks:
   resources:
   - google_cloud_tasks_.*
@@ -182,6 +203,7 @@ service/compute-commitment:
   resources:
   - google_compute_region_commitment.*
 service/compute-health:
+  team: compute-health
   resources:
   - google_compute_health_check
   - google_compute_http_health_check
@@ -216,9 +238,9 @@ service/compute-l7-load-balancer:
   resources:
   - google_compute_backend_bucket
   - google_compute_backend_bucket_signed_url_key
+  - google_compute_region_backend_bucket
   - google_compute_backend_service
   - google_compute_backend_service_signed_url_key
-  - google_compute_region_backend_bucket.*
   - google_compute_region_backend_service
   - google_compute_global_forwarding_rule
   - google_compute_forwarding_rule.*
@@ -241,6 +263,7 @@ service/compute-managed:
   - google_compute_region_instance_group_manager.*
   - google_compute_per_instance_config.*
   - google_compute_region_per_instance_config.*
+  - google_compute_bulk_per_instance_config.*
   - google_compute_resize_request.*
   - google_compute_region_resize_request.*
 service/compute-nat:
@@ -289,10 +312,12 @@ service/compute-router:
   - google_compute_router_interface
   - google_compute_router_peer
   - google_compute_router_route_policy
+  - google_compute_router_named_set
   - google_compute_router_status
 service/compute-security-policy:
   resources:
   - google_compute_network_edge_security_service
+  - google_compute_organization_security_policy.*
   - google_compute_region_security_policy.*
   - google_compute_security_policy.*
   - google_compute_project_cloud_armor_tier
@@ -313,6 +338,9 @@ service/compute-vpn:
   - google_compute_ha_vpn_gateway
   - google_compute_external_vpn_gateway
   - google_compute_vpn_.*
+service/config:
+  resources:
+  - google_config_deployment
 service/contactcenterinsights:
   resources:
   - google_contact_center_insights_.*
@@ -341,6 +369,9 @@ service/dataform:
 service/datafusion:
   resources:
   - google_data_fusion_.*
+service/datalineage:
+  resources:
+  - google_data_lineage_.*
 service/datamigration:
   resources:
   - google_database_migration_service_.*
@@ -368,16 +399,20 @@ service/deploymentmanager:
 service/developerconnect:
   resources:
   - google_developer_connect_.*
+  - google_cloudbuildv2_.*
 service/dialogflow:
   resources:
   - google_dialogflow_conversation_profile
+  - google_dialogflow_sip_trunk
 service/dialogflow-cx:
   resources:
   - google_dialogflow_cx_.*
   - google_dialogflow_agent
   - google_dialogflow_encryption_spec
   - google_dialogflow_entity_type
+  - google_dialogflow_environment
   - google_dialogflow_fulfillment
+  - google_dialogflow_generator
   - google_dialogflow_intent
   - google_dialogflow_version
 service/discoveryengine:
@@ -424,6 +459,7 @@ service/firebase:
   - google_firebase_storage.*
   - google_firebase_web.*
   - google_firebaserules_.*
+  - google_firebase_remote_config_.*
 service/firebaseailogic:
   team: firebase-terraform
   resources:
@@ -449,6 +485,9 @@ service/firestore-dataplane:
 service/gce-preview-feature:
   resources:
   - google_compute_preview_feature
+service/gce-rollout-plan:
+  resources:
+  - google_compute_rollout_plan
 service/gemini:
   resources:
   - google_gemini_.*
@@ -469,6 +508,9 @@ service/gkeonprem:
 service/healthcare:
   resources:
   - google_healthcare_.*
+service/hypercomputecluster:
+  resources:
+  - google_hypercomputecluster_cluster
 service/iam-core:
   resources:
   - google_organization_iam_custom_role
@@ -478,10 +520,12 @@ service/iam-core:
   - google_iam_role
   - google_iam_.*_policy_binding
   - google_iam_principal_access_boundary_policy
+  - google_iam_.*_access_policy
   - google_iam_testable_permissions
 service/iam-serviceaccount:
   resources:
   - google_project_default_service_accounts
+  - google_organization_service_identity
   - google_project_service_identity
   - google_folder_service_identity
   - google_service_account.*
@@ -508,6 +552,9 @@ service/integrationconnectors:
 service/integrations:
   resources:
   - google_integrations_.*
+service/licensemanager:
+  resources:
+  - google_license_manager_configuration
 service/logging:
   resources:
   - google_logging_.*
@@ -543,6 +590,7 @@ service/monitoring-alerting:
   resources:
   - google_monitoring_notification_channel
   - google_monitoring_alert_policy
+  - google_monitoring_snooze
 service/monitoring-metrics:
   resources:
   - google_monitoring_metric_descriptor
@@ -570,6 +618,7 @@ service/network-connectivity-center:
   - google_network_connectivity_hub
   - google_network_connectivity_spoke
   - google_network_connectivity_gateway_advertised_route
+  - google_network_connectivity_transport
   - google_network_security_sac_realm
   - google_network_security_sac_attachment
 service/network-security:
@@ -584,8 +633,10 @@ service/network-security-distributed-firewall:
   - google_network_security_security_profile.*
   - google_compute_firewall.*
   - google_compute_network_firewall_policy.*
-  - google_compute_organization_security_policy.*
   - google_compute_region_network_firewall_policy.*
+service/networkconnectivity-customhardware:
+  resources:
+  - google_network_connectivity_custom_hardware_.*
 service/networkconnectivity-private-range:
   resources:
   - google_network_connectivity_internal_range
@@ -595,6 +646,19 @@ service/networkconnectivity-serviceautomation:
 service/networkmanagement-connectivity-test:
   resources:
   - google_network_management_connectivity_test
+service/networkmanagement-insights:
+  resources:
+  - google_network_management_network_monitoring_provider
+service/networkmanagement-vpc-flow-logs:
+  resources:
+  - google_network_management_vpc_flow_logs_config
+service/networksecurity-intercept:
+  resources:
+  - google_network_security_intercept.*
+service/networksecurity-mirroring:
+  resources:
+  - google_network_security_mirroring.*
+  - google_network_security_ull_mirroring.*
 service/networksecurity-mtls:
   resources:
   - google_network_security_backend_authentication_config
@@ -604,10 +668,9 @@ service/networksecurity-swp:
   - google_network_security_gateway_security_policy_rule
   - google_network_security_url_lists
   - google_network_security_tls_inspection_policy
-service/networksecurityintegrations:
+service/networkservices-agent-gateway:
   resources:
-  - google_network_security_mirroring.*
-  - google_network_security_intercept.*
+  - google_network_services_agent_gateway
 service/networkservices-media-cdn:
   resources:
   - google_network_services_edge_cache_.*
@@ -644,6 +707,7 @@ service/orgpolicy:
 service/osconfig:
   resources:
   - google_os_config_.*
+  - google_compute_.*_vm_extension_policy
 service/oslogin:
   resources:
   - google_os_login_.*
@@ -740,6 +804,7 @@ service/sqladmin-cp:
   resources:
   - google_sql_database_instance
   - google_sql_database_instances
+  - google_sql_provision_script
   - google_sql_source_representation_instance
   - google_sql_tiers
 service/sqladmin-dp:
@@ -765,6 +830,9 @@ service/tpu:
 service/transcoder:
   resources:
   - google_transcoder_.*
+service/vectorsearch:
+  resources:
+  - google_vector_search_.*
 service/vmwareengine:
   resources:
   - google_vmwareengine_.*
@@ -777,6 +845,9 @@ service/websecurityscanner:
 service/workflows:
   resources:
   - google_workflows.*
+service/workloadidentity:
+  resources:
+  - google_workload_identity_.*
 service/workstations:
   resources:
   - google_workstations_.*

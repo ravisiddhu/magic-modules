@@ -6,6 +6,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-provider-google/google/acctest"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/ces"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/resourcemanager"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/secretmanager"
 )
 
 func TestAccCESApp_update(t *testing.T) {
@@ -76,6 +79,7 @@ resource "google_ces_app" "ces_app_basic" {
   description = "Basic CES App example"
   display_name = "tf-test-my-app-%{random_suffix}"
   pinned = false
+  tool_execution_mode = "SEQUENTIAL"
 
   language_settings {
     default_language_code    = "en-US"
@@ -132,11 +136,12 @@ resource "google_ces_app" "ces_app_basic" {
 
     conversation_logging_settings {
       disable_conversation_logging = true
+      retention_window = "86400s"
     }
   }
 
   model_settings {
-    model       = "gemini-1.5-flash"
+    model       = "gemini-3.0-flash-001"
     temperature = 0.5
   }
 
@@ -229,9 +234,24 @@ resource "google_ces_app" "ces_app_basic" {
   client_certificate_settings {
     tls_certificate = file("test-fixtures/cert.pem")
     private_key = google_secret_manager_secret_version.fake_secret_version.name
-    passphrase = "fakepassphrase"
   }
 
+  vpc_sc_settings {
+    allowed_origins = ["https://example.com"]
+  }
+
+  error_handling_settings {
+    error_handling_strategy = "FALLBACK_RESPONSE"
+    fallback_response_config {
+      custom_fallback_messages = {
+        "en-US" = "An error occurred, please try again."
+      }
+      max_fallback_attempts = 3
+    }
+    end_session_config {
+      escalate_session = true
+    }
+  }
 
   # Root agent should not be specified when creating an app
 }
@@ -268,10 +288,11 @@ resource "google_ces_app" "ces_app_basic" {
   description = "Updated CES App example"
   display_name = "tf-test-my-app%{random_suffix}"
   pinned = true
+  tool_execution_mode = "PARALLEL"
 
   language_settings {
-    default_language_code    = "en-ES"
-    supported_language_codes = ["en-US", "fr-FR"]
+    default_language_code    = "en-US"
+    supported_language_codes = ["en-US", "fr-FR", "es-ES"]
     enable_multilingual_support = false
     fallback_action          = "escalate"
   }
@@ -324,11 +345,12 @@ resource "google_ces_app" "ces_app_basic" {
 
     conversation_logging_settings {
       disable_conversation_logging = true
+      retention_window = "172800s"
     }
   }
 
   model_settings {
-    model       = "gemini-2.0-flash"
+    model       = "gemini-3.0-flash-001"
     temperature = 1.0
   }
 
@@ -407,6 +429,11 @@ resource "google_ces_app" "ces_app_basic" {
       theme    = "LIGHT"
       web_widget_title = "Help Assistant"
     }
+    whatsapp_config {
+      waba_id = "123456789012345"
+      phone_number_id = "987654321098765"
+      phone_number = "+15551234567"
+    }
   }
 
   metadata = {
@@ -420,7 +447,24 @@ resource "google_ces_app" "ces_app_basic" {
   client_certificate_settings {
     tls_certificate = file("test-fixtures/cert.pem")
     private_key = google_secret_manager_secret_version.fake_secret_version.name
-    passphrase = "fakepassphraseupdated"
+  }
+
+  vpc_sc_settings {
+    allowed_origins = ["https://example.com", "https://example.org:443"]
+  }
+
+  error_handling_settings {
+    error_handling_strategy = "END_SESSION"
+    fallback_response_config {
+      custom_fallback_messages = {
+        "en-US" = "Sorry, something went wrong."
+        "es-ES" = "Lo siento, algo salió mal."
+      }
+      max_fallback_attempts = 5
+    }
+    end_session_config {
+      escalate_session = false
+    }
   }
 
   # Root agent should not be specified when creating an app

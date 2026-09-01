@@ -6,8 +6,11 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 	"github.com/hashicorp/terraform-provider-google/google/acctest"
 	"github.com/hashicorp/terraform-provider-google/google/envvar"
+	"github.com/hashicorp/terraform-provider-google/google/services/iambeta"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/resourcemanager"
 )
 
 func TestAccProjectIamCustomRole_basic(t *testing.T) {
@@ -49,6 +52,34 @@ func TestAccProjectIamCustomRole_basic(t *testing.T) {
 				ResourceName:      "google_project_iam_custom_role.foo",
 				ImportState:       true,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+// TestAccProjectIamCustomRole_importWithIdentity exercises plannable import using the resource identity block (Terraform 1.12+).
+func TestAccProjectIamCustomRole_importWithIdentity(t *testing.T) {
+	t.Parallel()
+
+	roleId := "tfIamCustomRole" + acctest.RandString(t, 10)
+
+	acctest.VcrTest(t, resource.TestCase{
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipBelow(tfversion.Version1_12_0),
+		},
+		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
+		CheckDestroy:             testAccCheckGoogleProjectIamCustomRoleDestroyProducer(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccCheckGoogleProjectIamCustomRole_basic(roleId),
+				Check: resource.TestCheckResourceAttr(
+					"google_project_iam_custom_role.foo", "role_id", roleId),
+			},
+			{
+				ResourceName:    "google_project_iam_custom_role.foo",
+				ImportState:     true,
+				ImportStateKind: resource.ImportBlockWithResourceIdentity,
 			},
 		},
 	})
@@ -138,7 +169,7 @@ func testAccCheckGoogleProjectIamCustomRoleDestroyProducer(t *testing.T) func(s 
 				continue
 			}
 
-			role, err := config.NewIamClient(config.UserAgent).Projects.Roles.Get(rs.Primary.ID).Do()
+			role, err := iambeta.NewClient(config, config.UserAgent).Projects.Roles.Get(rs.Primary.ID).Do()
 
 			if err != nil {
 				return err
@@ -166,7 +197,7 @@ func testAccCheckGoogleProjectIamCustomRoleDeletionStatus(t *testing.T, n string
 		}
 
 		config := acctest.GoogleProviderConfig(t)
-		role, err := config.NewIamClient(config.UserAgent).Projects.Roles.Get(rs.Primary.ID).Do()
+		role, err := iambeta.NewClient(config, config.UserAgent).Projects.Roles.Get(rs.Primary.ID).Do()
 
 		if err != nil {
 			return err

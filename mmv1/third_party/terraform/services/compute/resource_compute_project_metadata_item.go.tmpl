@@ -5,17 +5,12 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/terraform-provider-google/google/registry"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-
-{{ if eq $.TargetVersionName `ga` }}
-	"google.golang.org/api/compute/v1"
-{{- else }}
-	compute "google.golang.org/api/compute/v0.beta"
-{{- end }}
 )
 
 type metadataPresentBehavior bool
@@ -36,6 +31,7 @@ func ResourceComputeProjectMetadataItem() *schema.Resource {
 		},
 
 		CustomizeDiff: customdiff.All(
+            tpgresource.DefaultProviderDeletionPolicy("DELETE"),
 			tpgresource.DefaultProviderProject,
 		),
 
@@ -58,6 +54,9 @@ func ResourceComputeProjectMetadataItem() *schema.Resource {
 				ForceNew:    true,
 				Description: `The ID of the project in which the resource belongs. If it is not provided, the provider project is used.`,
 			},
+			//UDP schema start
+            "deletion_policy": tpgresource.DeletionPolicySchemaEntry("DELETE"),
+//UDP schema end
 		},
 
 		Timeouts: &schema.ResourceTimeout{
@@ -84,8 +83,7 @@ func resourceComputeProjectMetadataItemCreate(d *schema.ResourceData, meta inter
 	key := d.Get("key").(string)
 	val := d.Get("value").(string)
 
-	err = updateComputeCommonInstanceMetadata(config, projectID, key, userAgent, &val, d.Timeout(schema.TimeoutCreate), failIfPresent)
-	if err != nil {
+	if err = updateComputeCommonInstanceMetadata(d, config, projectID, key, userAgent, &val, d.Timeout(schema.TimeoutCreate), failIfPresent); err != nil {
 		return err
 	}
 
@@ -107,12 +105,16 @@ func resourceComputeProjectMetadataItemRead(d *schema.ResourceData, meta interfa
 	}
 
 	log.Printf("[DEBUG] Loading project metadata: %s", projectID)
-	project, err := config.NewComputeClient(userAgent).Projects.Get(projectID).Do()
+	project, err := getComputeProject(d, config, projectID, userAgent)
 	if err != nil {
 		return fmt.Errorf("Error loading project '%s': %s", projectID, err)
 	}
 
-	md := FlattenMetadata(project.CommonInstanceMetadata)
+	var commonInstanceMetadata map[string]interface{}
+	if v, ok := project["commonInstanceMetadata"].(map[string]interface{}); ok {
+		commonInstanceMetadata = v
+	}
+	md := FlattenMetadata(commonInstanceMetadata)
 	val, ok := md[d.Id()]
 	if !ok {
 		// Resource no longer exists
@@ -130,10 +132,20 @@ func resourceComputeProjectMetadataItemRead(d *schema.ResourceData, meta interfa
 		return fmt.Errorf("Error setting value: %s", err)
 	}
 
+        
+    if err := tpgresource.DeletionPolicyReadDefault(d, config, "DELETE"); err != nil{
+        return err
+    }
+    
 	return nil
 }
 
 func resourceComputeProjectMetadataItemUpdate(d *schema.ResourceData, meta interface{}) error {
+    
+    if tpgresource.DeletionPolicyPreUpdate(d, ResourceComputeProjectMetadataItem) {
+        return ResourceComputeProjectMetadataItem().Read(d, meta)
+    }
+    
 	config := meta.(*transport_tpg.Config)
 	userAgent, err :=  tpgresource.GenerateUserAgentString(d, config.UserAgent)
 	if err != nil {
@@ -150,8 +162,7 @@ func resourceComputeProjectMetadataItemUpdate(d *schema.ResourceData, meta inter
 		_, n := d.GetChange("value")
 		new := n.(string)
 
-		err = updateComputeCommonInstanceMetadata(config, projectID, key, userAgent, &new, d.Timeout(schema.TimeoutUpdate), overwritePresent)
-		if err != nil {
+		if err = updateComputeCommonInstanceMetadata(d, config, projectID, key, userAgent, &new, d.Timeout(schema.TimeoutUpdate), overwritePresent); err != nil {
 			return err
 		}
 	}
@@ -159,7 +170,14 @@ func resourceComputeProjectMetadataItemUpdate(d *schema.ResourceData, meta inter
 }
 
 func resourceComputeProjectMetadataItemDelete(d *schema.ResourceData, meta interface{}) error {
-	config := meta.(*transport_tpg.Config)
+    
+    if ok, err := tpgresource.DeletionPolicyPreDelete(d); err != nil{
+        return err
+    }else if ok{
+        return nil
+    }
+    	
+    config :=  meta.(*transport_tpg.Config)
 	userAgent, err :=  tpgresource.GenerateUserAgentString(d, config.UserAgent)
 	if err != nil {
 		return err
@@ -172,8 +190,7 @@ func resourceComputeProjectMetadataItemDelete(d *schema.ResourceData, meta inter
 
 	key := d.Get("key").(string)
 
-	err = updateComputeCommonInstanceMetadata(config, projectID, key, userAgent, nil, d.Timeout(schema.TimeoutDelete), overwritePresent)
-	if err != nil {
+	if err = updateComputeCommonInstanceMetadata(d, config, projectID, key, userAgent, nil, d.Timeout(schema.TimeoutDelete), overwritePresent); err != nil {
 		return err
 	}
 
@@ -200,19 +217,23 @@ func resourceComputeProjectMetadataItemImportState(d *schema.ResourceData, meta 
 	return []*schema.ResourceData{d}, nil
 }
 
-func updateComputeCommonInstanceMetadata(config *transport_tpg.Config, projectID, key, userAgent string, afterVal *string, timeout time.Duration, failIfPresent metadataPresentBehavior) error {
+func updateComputeCommonInstanceMetadata(d *schema.ResourceData, config *transport_tpg.Config, projectID, key, userAgent string, afterVal *string, timeout time.Duration, failIfPresent metadataPresentBehavior) error {
 	updateMD := func() error {
 		lockName := fmt.Sprintf("projects/%s/commoninstancemetadata", projectID)
 		transport_tpg.MutexStore.Lock(lockName)
 		defer transport_tpg.MutexStore.Unlock(lockName)
 
 		log.Printf("[DEBUG] Loading project metadata: %s", projectID)
-		project, err := config.NewComputeClient(userAgent).Projects.Get(projectID).Do()
+		project, err := getComputeProject(d, config, projectID, userAgent)
 		if err != nil {
 			return fmt.Errorf("Error loading project '%s': %s", projectID, err)
 		}
 
-		md := FlattenMetadata(project.CommonInstanceMetadata)
+		var commonInstanceMetadata map[string]interface{}
+		if v, ok := project["commonInstanceMetadata"].(map[string]interface{}); ok {
+			commonInstanceMetadata = v
+		}
+		md := FlattenMetadata(commonInstanceMetadata)
 
 		val, ok := md[key]
 
@@ -237,23 +258,47 @@ func updateComputeCommonInstanceMetadata(config *transport_tpg.Config, projectID
 			md[key] = *afterVal
 		}
 
-		// Attempt to write the new value now
-		op, err := config.NewComputeClient(userAgent).Projects.SetCommonInstanceMetadata(
-			projectID,
-			&compute.Metadata{
-				Fingerprint: project.CommonInstanceMetadata.Fingerprint,
-				Items:       expandComputeMetadata(md),
-			},
-		).Do()
+		body := map[string]interface{}{
+			"items": expandComputeMetadata(md),
+		}
+		if commonInstanceMetadata != nil {
+			if fp, ok := commonInstanceMetadata["fingerprint"].(string); ok && fp != "" {
+				body["fingerprint"] = fp
+			}
+		}
 
+		url, err := tpgresource.ReplaceVars(d, config, "{{"{{"}}ComputeBasePath{{"}}"}}")
+		if err != nil {
+			return err
+		}
+		url = fmt.Sprintf("%sprojects/%s/setCommonInstanceMetadata", url, projectID)
+		res, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
+			Config:    config,
+			Method:    "POST",
+			Project:   projectID,
+			RawURL:    url,
+			UserAgent: userAgent,
+			Body:      body,
+			Timeout:   timeout,
+		})
 		if err != nil {
 			return err
 		}
 
-		log.Printf("[DEBUG] SetCommonInstanceMetadata: %d (%s)", op.Id, op.SelfLink)
+		log.Printf("[DEBUG] SetCommonInstanceMetadata: %v", res["selfLink"])
 
-		return ComputeOperationWaitTime(config, op, project.Name, "SetCommonInstanceMetadata", userAgent, timeout)
+		projectName, _ := project["name"].(string)
+		return ComputeOperationWaitTime(config, res, projectName, "SetCommonInstanceMetadata", userAgent, timeout)
 	}
 
 	return transport_tpg.MetadataRetryWrapper(updateMD)
+}
+
+func init() {
+	registry.Schema{
+		Name: "google_compute_project_metadata_item",
+		ProductName: "compute",
+		Type: registry.SchemaTypeResource,
+		Schema: ResourceComputeProjectMetadataItem(),
+	}.Register()
 }

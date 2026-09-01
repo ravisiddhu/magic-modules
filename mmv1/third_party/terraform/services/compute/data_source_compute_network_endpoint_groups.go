@@ -1,0 +1,152 @@
+package compute
+
+import (
+	"fmt"
+	neturl "net/url"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-google/google/registry"
+	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
+	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
+)
+
+func DataSourceGoogleComputeNetworkEndpointGroups() *schema.Resource {
+	// Generate datasource schema from resource
+	dsSchema := tpgresource.DatasourceSchemaFromResourceSchema(ResourceComputeNetworkEndpointGroup().Schema)
+
+	return &schema.Resource{
+		Read: dataSourceComputeNetworkEndpointGroupsRead,
+		Schema: map[string]*schema.Schema{
+			"filter": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+
+			"project": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+
+			"zone": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+
+			"network_endpoint_groups": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: dsSchema,
+				},
+			},
+		},
+	}
+}
+
+func dataSourceComputeNetworkEndpointGroupsRead(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*transport_tpg.Config)
+	id := ""
+
+	userAgent, err := tpgresource.GenerateUserAgentString(d, config.UserAgent)
+	if err != nil {
+		return err
+	}
+	project, err := tpgresource.GetProject(d, config)
+	if err != nil {
+		return err
+	}
+	zone, err := tpgresource.GetZone(d, config)
+	if err != nil {
+		return err
+	}
+	id = fmt.Sprintf("projects/%s/zones/%s/networkEndpointGroups", project, zone)
+	d.SetId(id)
+
+	filter := d.Get("filter").(string)
+
+	networkEndpointGroups := make([]map[string]interface{}, 0)
+
+	baseURL := fmt.Sprintf("%sprojects/%s/zones/%s/networkEndpointGroups", transport_tpg.BaseUrl(Product, config), project, zone)
+	pageToken := ""
+
+	for {
+		params := neturl.Values{}
+		if filter != "" {
+			params.Set("filter", filter)
+		}
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+		url := baseURL
+		if len(params) > 0 {
+			url = fmt.Sprintf("%s?%s", url, params.Encode())
+		}
+		networkEndpointGroupsList, err := transport_tpg.SendRequest(transport_tpg.SendRequestOptions{
+			Config:    config,
+			Method:    "GET",
+			Project:   project,
+			RawURL:    url,
+			UserAgent: userAgent,
+		})
+		if err != nil {
+			return transport_tpg.HandleNotFoundError(err, d, fmt.Sprintf("NetworkEndpointGroups : %s %s", project, zone))
+		}
+
+		if rawItems, ok := networkEndpointGroupsList["items"].([]interface{}); ok {
+			for _, raw := range rawItems {
+				neg, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				negNetwork, _ := neg["network"].(string)
+				network, err := tpgresource.GetRelativePath(negNetwork)
+				if err != nil {
+					return err
+				}
+				negSubnetwork, _ := neg["subnetwork"].(string)
+				subnetwork, err := tpgresource.GetRelativePath(negSubnetwork)
+				if err != nil {
+					return err
+				}
+				defaultPort := 0
+				if v, ok := neg["defaultPort"].(float64); ok {
+					defaultPort = int(v)
+				}
+				size := 0
+				if v, ok := neg["size"].(float64); ok {
+					size = int(v)
+				}
+				networkEndpointGroups = append(networkEndpointGroups, map[string]interface{}{
+					"self_link":             neg["selfLink"],
+					"name":                  neg["name"],
+					"description":           neg["description"],
+					"network_endpoint_type": neg["networkEndpointType"],
+					"network":               network,
+					"subnetwork":            subnetwork,
+					"default_port":          defaultPort,
+					"size":                  size,
+				})
+			}
+		}
+
+		pageToken, _ = networkEndpointGroupsList["nextPageToken"].(string)
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if err := d.Set("network_endpoint_groups", networkEndpointGroups); err != nil {
+		return fmt.Errorf("Error retrieving network endpoint groups: %s", err)
+	}
+
+	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_compute_network_endpoint_groups",
+		ProductName: "compute",
+		Type:        registry.SchemaTypeDataSource,
+		Schema:      DataSourceGoogleComputeNetworkEndpointGroups(),
+	}.Register()
+}

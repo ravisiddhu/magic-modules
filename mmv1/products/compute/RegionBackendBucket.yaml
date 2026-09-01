@@ -13,6 +13,7 @@
 
 ---
 name: 'RegionBackendBucket'
+min_version: 'beta'
 kind: 'compute#backendBucket'
 description: |
   Regional backend buckets allow you to use Google Cloud Storage buckets with
@@ -36,10 +37,11 @@ description: |
 references:
   guides:
     'Using a Cloud Storage bucket as a load balancer backend': 'https://cloud.google.com/compute/docs/load-balancing/http/backend-bucket'
-  api: 'https://cloud.google.com/compute/docs/reference/v1/regionBackendBuckets'
+  api: 'https://cloud.google.com/compute/docs/reference/beta/regionBackendBuckets'
 docs:
 base_url: 'projects/{{project}}/regions/{{region}}/backendBuckets'
 has_self_link: true
+generate_list_resource: true
 timeouts:
   insert_minutes: 20
   update_minutes: 20
@@ -65,26 +67,34 @@ sweeper:
     - region: "us-central1"
     - region: "us-east1"
     - region: "europe-west1"
-examples:
+samples:
   - name: 'region_backend_bucket_basic'
     primary_resource_id: 'image_backend'
-    primary_resource_name: 'fmt.Sprintf("tf-test-region-image-backend-bucket%s", context["random_suffix"])'
-    vars:
-      backend_bucket_name: 'region-image-backend-bucket'
-      bucket_name: 'region-image-store-bucket'
-      region: 'us-central1'
+    steps:
+      - name: 'region_backend_bucket_basic'
+        vars:
+          region: 'us-central1'
+        resource_id_vars:
+          backend_bucket_name: 'region-image-backend-bucket'
+          bucket_name: 'region-image-store-bucket'
   - name: 'region_backend_bucket_internal_lb'
     primary_resource_id: 'internal_backend'
-    vars:
-      backend_bucket_name: 'regional-internal-backend'
-      bucket_name: 'regional-internal-bucket'
-      region: 'us-central1'
+    steps:
+      - name: 'region_backend_bucket_internal_lb'
+        vars:
+          region: 'us-central1'
+        resource_id_vars:
+          backend_bucket_name: 'regional-internal-backend'
+          bucket_name: 'regional-internal-bucket'
   - name: 'region_backend_bucket_external_lb'
     primary_resource_id: 'external_backend'
-    vars:
-      backend_bucket_name: 'regional-external-backend'
-      bucket_name: 'regional-external-bucket'
-      region: 'us-east1'
+    steps:
+      - name: 'region_backend_bucket_external_lb'
+        vars:
+          region: 'us-east1'
+        resource_id_vars:
+          backend_bucket_name: 'regional-external-backend'
+          bucket_name: 'regional-external-bucket'
 parameters:
   - name: 'region'
     type: ResourceRef

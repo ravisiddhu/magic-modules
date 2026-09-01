@@ -5,19 +5,40 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/terraform-provider-google/google/registry"
+	"github.com/hashicorp/terraform-provider-google/google/services/iambeta"
 	"github.com/hashicorp/terraform-provider-google/google/tpgresource"
 	transport_tpg "github.com/hashicorp/terraform-provider-google/google/transport"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"google.golang.org/api/iam/v1"
+	iam "google.golang.org/api/iam/v1"
 )
 
 func ResourceGoogleServiceAccountKey() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGoogleServiceAccountKeyCreate,
 		Read:   resourceGoogleServiceAccountKeyRead,
+		Update: resourceGoogleServiceAccountKeyUpdate,
 		Delete: resourceGoogleServiceAccountKeyDelete,
+
+		Identity: &schema.ResourceIdentity{
+			Version: 1,
+			SchemaFunc: func() map[string]*schema.Schema {
+				return map[string]*schema.Schema{
+					"name": {
+						Type:              schema.TypeString,
+						RequiredForImport: true,
+					},
+				}
+			},
+		},
+
+		CustomizeDiff: customdiff.All(
+			tpgresource.DefaultProviderDeletionPolicy("DELETE"),
+		),
+
 		Schema: map[string]*schema.Schema{
 			// Required
 			"service_account_id": {
@@ -91,6 +112,9 @@ func ResourceGoogleServiceAccountKey() *schema.Resource {
 				Computed:    true,
 				Description: `The key can be used before this timestamp. A timestamp in RFC3339 UTC "Zulu" format, accurate to nanoseconds. Example: "2014-10-02T15:01:23.045123456Z".`,
 			},
+			//UDP schema start
+			"deletion_policy": tpgresource.DeletionPolicySchemaEntry("DELETE"),
+			//UDP schema end
 		},
 		UseJSONNumber: true,
 	}
@@ -114,7 +138,7 @@ func resourceGoogleServiceAccountKeyCreate(d *schema.ResourceData, meta interfac
 		ru := &iam.UploadServiceAccountKeyRequest{
 			PublicKeyData: d.Get("public_key_data").(string),
 		}
-		sak, err = config.NewIamClient(userAgent).Projects.ServiceAccounts.Keys.Upload(serviceAccountName, ru).Do()
+		sak, err = iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Keys.Upload(serviceAccountName, ru).Do()
 		if err != nil {
 			return fmt.Errorf("Error creating service account key: %s", err)
 		}
@@ -123,13 +147,18 @@ func resourceGoogleServiceAccountKeyCreate(d *schema.ResourceData, meta interfac
 			KeyAlgorithm:   d.Get("key_algorithm").(string),
 			PrivateKeyType: d.Get("private_key_type").(string),
 		}
-		sak, err = config.NewIamClient(userAgent).Projects.ServiceAccounts.Keys.Create(serviceAccountName, rc).Do()
+		sak, err = iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Keys.Create(serviceAccountName, rc).Do()
 		if err != nil {
 			return fmt.Errorf("Error creating service account key: %s", err)
 		}
 	}
 
 	d.SetId(sak.Name)
+	if err := tpgresource.SetResourceIdentityAttributes(d, map[string]interface{}{
+		"name": sak.Name,
+	}); err != nil {
+		return err
+	}
 	// Data only available on create.
 	if err := d.Set("valid_after", sak.ValidAfterTime); err != nil {
 		return fmt.Errorf("Error setting valid_after: %s", err)
@@ -141,7 +170,7 @@ func resourceGoogleServiceAccountKeyCreate(d *schema.ResourceData, meta interfac
 		return fmt.Errorf("Error setting private_key: %s", err)
 	}
 
-	err = ServiceAccountKeyWaitTime(config.NewIamClient(userAgent).Projects.ServiceAccounts.Keys, d.Id(), d.Get("public_key_type").(string), "Creating Service account key", 4*time.Minute)
+	err = ServiceAccountKeyWaitTime(iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Keys, d.Id(), d.Get("public_key_type").(string), "Creating Service account key", 4*time.Minute)
 	if err != nil {
 		return err
 	}
@@ -164,7 +193,7 @@ func resourceGoogleServiceAccountKeyRead(d *schema.ResourceData, meta interface{
 	publicKeyType := d.Get("public_key_type").(string)
 
 	// Confirm the service account key exists
-	sak, err := config.NewIamClient(userAgent).Projects.ServiceAccounts.Keys.Get(d.Id()).PublicKeyType(publicKeyType).Do()
+	sak, err := iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Keys.Get(d.Id()).PublicKeyType(publicKeyType).Do()
 	if err != nil {
 		if err = transport_tpg.HandleNotFoundError(err, d, fmt.Sprintf("Service Account Key %q", d.Id())); err == nil {
 			return nil
@@ -180,6 +209,16 @@ func resourceGoogleServiceAccountKeyRead(d *schema.ResourceData, meta interface{
 		}
 	}
 
+	if err := flattenServiceAccountKey(d, config, sak); err != nil {
+		return err
+	}
+
+	return tpgresource.SetResourceIdentityAttributes(d, map[string]interface{}{
+		"name": sak.Name,
+	})
+}
+
+func flattenServiceAccountKey(d *schema.ResourceData, config *transport_tpg.Config, sak *iam.ServiceAccountKey) error {
 	if err := d.Set("name", sak.Name); err != nil {
 		return fmt.Errorf("Error setting name: %s", err)
 	}
@@ -189,17 +228,37 @@ func resourceGoogleServiceAccountKeyRead(d *schema.ResourceData, meta interface{
 	if err := d.Set("public_key", sak.PublicKeyData); err != nil {
 		return fmt.Errorf("Error setting public_key: %s", err)
 	}
+
+	if err := tpgresource.DeletionPolicyReadDefault(d, config, "DELETE"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
+// UDP update start
+func resourceGoogleServiceAccountKeyUpdate(d *schema.ResourceData, meta interface{}) error {
+	// Only the root field "deletion_policy", "labels", "terraform_labels", and virtual fields are mutable
+	return resourceGoogleServiceAccountKeyRead(d, meta)
+}
+
+//UDP update end
+
 func resourceGoogleServiceAccountKeyDelete(d *schema.ResourceData, meta interface{}) error {
+
+	if ok, err := tpgresource.DeletionPolicyPreDelete(d); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+
 	config := meta.(*transport_tpg.Config)
 	userAgent, err := tpgresource.GenerateUserAgentString(d, config.UserAgent)
 	if err != nil {
 		return err
 	}
 
-	_, err = config.NewIamClient(userAgent).Projects.ServiceAccounts.Keys.Delete(d.Id()).Do()
+	_, err = iambeta.NewClient(config, userAgent).Projects.ServiceAccounts.Keys.Delete(d.Id()).Do()
 
 	if err != nil {
 		if err = transport_tpg.HandleNotFoundError(err, d, fmt.Sprintf("Service Account Key %q", d.Id())); err == nil {
@@ -218,4 +277,13 @@ func resourceGoogleServiceAccountKeyDelete(d *schema.ResourceData, meta interfac
 
 	d.SetId("")
 	return nil
+}
+
+func init() {
+	registry.Schema{
+		Name:        "google_service_account_key",
+		ProductName: "resourcemanager",
+		Type:        registry.SchemaTypeResource,
+		Schema:      ResourceGoogleServiceAccountKey(),
+	}.Register()
 }

@@ -6,13 +6,21 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-provider-google/google/acctest"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/alloydb"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/compute"
+	"github.com/hashicorp/terraform-provider-google/google/services/kms"
+	_ "github.com/hashicorp/terraform-provider-google/google/services/resourcemanager"
+	"github.com/hashicorp/terraform-provider-google/google/services/servicenetworking"
 )
 
 func TestAccAlloydbCluster_update(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -51,7 +59,7 @@ func TestAccAlloydbCluster_update(t *testing.T) {
 func testAccAlloydbCluster_update(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -68,16 +76,21 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
 
+// TestAccAlloydbCluster_upgrade verifies the basic major version upgrade path (database_version only).
+// Note: this test does not exercise the url-shadowing regression because no other cluster-level
+// fields change simultaneously — updateMask becomes empty after databaseVersion is removed, so the
+// regular UpdateCluster call is skipped entirely. See TestAccAlloydbCluster_upgradeWithSimultaneousUpdate
+// for the regression test that covers the scenario where multiple cluster properties are updated simultaneously.
 func TestAccAlloydbCluster_upgrade(t *testing.T) {
 	t.Parallel()
 
 	context := map[string]interface{}{
-		"network_name":  acctest.BootstrapSharedServiceNetworkingConnection(t, "alloydb-1"),
+		"network_name":  servicenetworking.BootstrapSharedServiceNetworkingConnection(t, "alloydb-1"),
 		"random_suffix": acctest.RandString(t, 10),
 	}
 
@@ -97,6 +110,9 @@ func TestAccAlloydbCluster_upgrade(t *testing.T) {
 			},
 			{
 				Config: testAccAlloydbCluster_afterUpgrade(context),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "database_version", "POSTGRES_15"),
+				),
 			},
 			{
 				ResourceName:            "google_alloydb_cluster.default",
@@ -176,12 +192,104 @@ data "google_compute_network" "default" {
 `, context)
 }
 
+// TestAccAlloydbCluster_upgradeWithSimultaneousUpdate is a regression test for a bug where
+// upgrading database_version simultaneously with other cluster-level field changes caused a 400 error.
+// The upgrade block used := instead of = when rebuilding the url, creating a local variable that
+// shadowed the outer url. The outer url (still containing databaseVersion in updateMask) was then
+// passed to the regular UpdateCluster call whose body had databaseVersion removed, causing GCP to
+// attempt a reset to the default version and return:
+//
+//	400: "updating field database_version is not supported (current value: POSTGRES_15, specified value: POSTGRES_14)"
+func TestAccAlloydbCluster_upgradeWithSimultaneousUpdate(t *testing.T) {
+	t.Parallel()
+
+	context := map[string]interface{}{
+		"network_name":  servicenetworking.BootstrapSharedServiceNetworkingConnection(t, "alloydb-1"),
+		"random_suffix": acctest.RandString(t, 10),
+	}
+
+	acctest.VcrTest(t, resource.TestCase{
+		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
+		CheckDestroy:             testAccCheckAlloydbClusterDestroyProducer(t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAlloydbCluster_beforeUpgrade(context),
+			},
+			{
+				ResourceName:            "google_alloydb_cluster.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"deletion_protection", "initial_user", "cluster_id", "location", "labels", "terraform_labels", "skip_await_major_version_upgrade"},
+			},
+			{
+				// Simultaneously upgrade database_version and change labels.
+				// This triggers the bug: after the upgrade block removes databaseVersion from
+				// updateMask, the remaining [labels] is non-empty, so regular UpdateCluster runs.
+				// With the bug, the outer url still carries databaseVersion in updateMask → 400.
+				Config: testAccAlloydbCluster_afterUpgradeWithLabel(context),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "database_version", "POSTGRES_15"),
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "labels.env", "test"),
+				),
+			},
+			{
+				ResourceName:            "google_alloydb_cluster.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"deletion_protection", "initial_user", "cluster_id", "location", "labels", "terraform_labels", "skip_await_major_version_upgrade"},
+			},
+		},
+	})
+}
+
+func testAccAlloydbCluster_afterUpgradeWithLabel(context map[string]interface{}) string {
+	return acctest.Nprintf(`
+resource "google_alloydb_cluster" "default" {
+  skip_await_major_version_upgrade = false
+  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  location   = "us-central1"
+  network_config {
+    network = data.google_compute_network.default.id
+  }
+  database_version = "POSTGRES_15"
+
+  labels = {
+    env = "test"
+  }
+
+  initial_user {
+    password = "tf_test_cluster_secret%{random_suffix}"
+  }
+
+  deletion_protection = false
+}
+
+resource "google_alloydb_instance" "default" {
+  cluster       = google_alloydb_cluster.default.name
+  instance_id   = "tf-test-alloydb-instance%{random_suffix}"
+  instance_type = "PRIMARY"
+
+  machine_config {
+    cpu_count = 8
+  }
+}
+
+data "google_compute_network" "default" {
+  name = "%{network_name}"
+}
+`, context)
+}
+
 // Trial cluster creation should succeed with subscription type field set to Trial.
 func TestAccAlloydbCluster_withSubscriptionTypeTrial(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -204,7 +312,7 @@ func TestAccAlloydbCluster_withSubscriptionTypeTrial(t *testing.T) {
 func testAccAlloydbCluster_withSubscriptionTypeTrial(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   subscription_type = "TRIAL"
   network_config {
@@ -222,7 +330,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -231,8 +339,11 @@ resource "google_compute_network" "default" {
 func TestAccAlloydbCluster_withSubscriptionTypeStandard(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -253,7 +364,7 @@ func TestAccAlloydbCluster_withSubscriptionTypeStandard(t *testing.T) {
 func testAccAlloydbCluster_withSubscriptionTypeStandard(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   subscription_type = "STANDARD"
   network_config {
@@ -271,7 +382,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -282,9 +393,12 @@ resource "google_compute_network" "default" {
 func TestAccAlloydbCluster_addAutomatedBackupPolicyAndInitialUser(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
-		"hour":          23,
+		"alloydb_cluster_name": "tf-test-alloydb-cluster" + randomSuffix,
+		"random_suffix":        randomSuffix,
+		"hour":                 23,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -323,9 +437,12 @@ func TestAccAlloydbCluster_addAutomatedBackupPolicyAndInitialUser(t *testing.T) 
 func TestAccAlloydbCluster_deleteAutomatedBackupPolicyAndInitialUser(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
-		"hour":          23,
+		"alloydb_cluster_name": "tf-test-alloydb-cluster" + randomSuffix,
+		"random_suffix":        randomSuffix,
+		"hour":                 23,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -363,9 +480,12 @@ func TestAccAlloydbCluster_deleteAutomatedBackupPolicyAndInitialUser(t *testing.
 func TestAccAlloydbCluster_AutomatedBackupPolicyHandlesMidnight(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
-		"hour":          0,
+		"alloydb_cluster_name": "tf-test-alloydb-cluster" + randomSuffix,
+		"random_suffix":        randomSuffix,
+		"hour":                 0,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -392,7 +512,7 @@ func TestAccAlloydbCluster_AutomatedBackupPolicyHandlesMidnight(t *testing.T) {
 func testAccAlloydbCluster_withInitialUserAndAutomatedBackupPolicy(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id   = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id   = "%{alloydb_cluster_name}"
   location     = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -439,7 +559,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -447,7 +567,7 @@ resource "google_compute_network" "default" {
 func testAccAlloydbCluster_withoutAutomatedBackupPolicy(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -468,7 +588,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -531,52 +651,15 @@ resource "google_compute_network" "default" {
 `, context)
 }
 
-// The cluster creation should succeed with minimal number of arguments.
-func TestAccAlloydbCluster_mandatoryFields(t *testing.T) {
-	t.Parallel()
-
-	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
-	}
-
-	acctest.VcrTest(t, resource.TestCase{
-		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
-		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
-		CheckDestroy:             testAccCheckAlloydbClusterDestroyProducer(t),
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlloydbCluster_alloydbClusterBasicExample(context),
-			},
-		},
-	})
-}
-
-// The cluster creation should succeed with maximal number of arguments.
-func TestAccAlloydbCluster_maximumFields(t *testing.T) {
-	t.Parallel()
-
-	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
-	}
-
-	acctest.VcrTest(t, resource.TestCase{
-		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
-		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
-		CheckDestroy:             testAccCheckAlloydbClusterDestroyProducer(t),
-		Steps: []resource.TestStep{
-			{
-				Config: testAccAlloydbCluster_alloydbClusterFullExample(context),
-			},
-		},
-	})
-}
-
 // Deletion of time-based retention policy should be an in-place operation
 func TestAccAlloydbCluster_deleteTimeBasedRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -612,7 +695,7 @@ func TestAccAlloydbCluster_deleteTimeBasedRetentionPolicy(t *testing.T) {
 func testAccAlloydbCluster_withTimeBasedRetentionPolicy(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -653,7 +736,7 @@ resource "google_alloydb_cluster" "default" {
 data "google_project" "project" { }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -661,7 +744,7 @@ resource "google_compute_network" "default" {
 func testAccAlloydbCluster_withoutTimeBasedRetentionPolicy(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -699,7 +782,7 @@ resource "google_alloydb_cluster" "default" {
 data "google_project" "project" { }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -708,7 +791,7 @@ func TestAccAlloydbCluster_usingCMEK(t *testing.T) {
 
 	context := map[string]interface{}{
 		"random_suffix": acctest.RandString(t, 10),
-		"kms_key_name":  acctest.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-cluster-key1").CryptoKey.Name,
+		"kms_key_name":  kms.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-cluster-key1").CryptoKey.Name,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -764,8 +847,8 @@ func TestAccAlloydbCluster_CMEKInAutomatedBackupIsUpdatable(t *testing.T) {
 
 	context := map[string]interface{}{
 		"random_suffix": acctest.RandString(t, 10),
-		"kms_key_name1": acctest.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-backup-update-key1").CryptoKey.Name,
-		"kms_key_name2": acctest.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-backup-update-key2").CryptoKey.Name,
+		"kms_key_name1": kms.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-backup-update-key1").CryptoKey.Name,
+		"kms_key_name2": kms.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-backup-update-key2").CryptoKey.Name,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -960,8 +1043,11 @@ resource "google_kms_crypto_key_iam_member" "crypto_key2" {
 func TestAccAlloydbCluster_continuousBackup_enabledByDefault(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -994,10 +1080,13 @@ func TestAccAlloydbCluster_continuousBackup_enabledByDefault(t *testing.T) {
 func TestAccAlloydbCluster_continuousBackup_update_noChangeIfDefaultsSet(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix":        acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
 		"enabled":              true,
 		"recovery_window_days": 14,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1043,10 +1132,13 @@ func TestAccAlloydbCluster_continuousBackup_update_noChangeIfDefaultsSet(t *test
 func TestAccAlloydbCluster_continuousBackup_noChangeIfRemoved(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix":        acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
 		"enabled":              true,
 		"recovery_window_days": 14,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1082,16 +1174,20 @@ func TestAccAlloydbCluster_continuousBackup_noChangeIfRemoved(t *testing.T) {
 func TestAccAlloydbCluster_continuousBackup_update(t *testing.T) {
 	t.Parallel()
 
-	suffix := acctest.RandString(t, 10)
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix":        suffix,
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
 		"enabled":              true,
 		"recovery_window_days": 15,
+		"random_suffix":        randomSuffix,
 	}
+
 	context2 := map[string]interface{}{
-		"random_suffix":        suffix,
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
 		"enabled":              false,
 		"recovery_window_days": 14,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1148,7 +1244,7 @@ func TestAccAlloydbCluster_continuousBackup_update(t *testing.T) {
 func testAccAlloydbCluster_withoutContinuousBackupConfig(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -1169,7 +1265,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -1177,7 +1273,7 @@ resource "google_compute_network" "default" {
 func testAccAlloydbCluster_continuousBackupConfig(context map[string]interface{}) string {
 	return acctest.Nprintf(`
 resource "google_alloydb_cluster" "default" {
-  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  cluster_id = "%{alloydb_cluster_name}"
   location   = "us-central1"
   network_config {
     network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
@@ -1203,7 +1299,7 @@ data "google_project" "project" {
 }
 
 resource "google_compute_network" "default" {
-  name = "tf-test-alloydb-cluster%{random_suffix}"
+  name = "%{alloydb_cluster_name}"
 }
 `, context)
 }
@@ -1212,18 +1308,18 @@ func TestAccAlloydbCluster_continuousBackup_CMEKIsUpdatable(t *testing.T) {
 	t.Parallel()
 
 	suffix := acctest.RandString(t, 10)
-	kms := acctest.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-key1")
+	boostrapped := kms.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-key1")
 	context := map[string]interface{}{
 		"random_suffix": suffix,
-		"key_ring":      kms.KeyRing.Name,
-		"key_name":      kms.CryptoKey.Name,
+		"key_ring":      boostrapped.KeyRing.Name,
+		"key_name":      boostrapped.CryptoKey.Name,
 	}
 
-	kms2 := acctest.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-key2")
+	bootstrapped2 := kms.BootstrapKMSKeyWithPurposeInLocationAndName(t, "ENCRYPT_DECRYPT", "us-central1", "tf-bootstrap-alloydb-key2")
 	context2 := map[string]interface{}{
 		"random_suffix": suffix,
-		"key_ring":      kms2.KeyRing.Name,
-		"key_name":      kms2.CryptoKey.Name,
+		"key_ring":      bootstrapped2.KeyRing.Name,
+		"key_name":      bootstrapped2.CryptoKey.Name,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1639,8 +1735,11 @@ data "google_project" "project" {}
 func TestAccAlloydbCluster_standardClusterUpdate(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1686,8 +1785,11 @@ func TestAccAlloydbCluster_standardClusterUpdate(t *testing.T) {
 func TestAccAlloydbCluster_trialClusterUpdate(t *testing.T) {
 	t.Parallel()
 
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1730,8 +1832,12 @@ func TestAccAlloydbCluster_trialClusterUpdate(t *testing.T) {
 func TestAccAlloydbCluster_standardClusterUpdateFailure(t *testing.T) {
 	t.Parallel()
 	errorPattern := `.*The request was invalid: invalid subscription_type update`
+
+	randomSuffix := acctest.RandString(t, 10)
+
 	context := map[string]interface{}{
-		"random_suffix": acctest.RandString(t, 10),
+		"alloydb_cluster_name": "tf-test-alloydb-cluster-full" + randomSuffix,
+		"random_suffix":        randomSuffix,
 	}
 
 	acctest.VcrTest(t, resource.TestCase{
@@ -1904,6 +2010,131 @@ resource "google_alloydb_cluster" "default" {
 data "google_project" "project" {
 }
 
+resource "google_compute_network" "default" {
+  name = "tf-test-alloydb-cluster%{random_suffix}"
+}
+`, context)
+}
+
+func TestAccAlloydbCluster_withDefaultDataplexConfig(t *testing.T) {
+	t.Parallel()
+
+	context := map[string]interface{}{
+		"random_suffix": acctest.RandString(t, 10),
+	}
+
+	acctest.VcrTest(t, resource.TestCase{
+		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
+		CheckDestroy:             testAccCheckAlloydbClusterDestroyProducer(t),
+		Steps: []resource.TestStep{
+			// Create with NO config: Backend should enable dataplex by default
+			{
+				Config: testAccAlloydbCluster_noDataplexConfig(context),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "dataplex_config.0.enabled", "true"),
+				),
+			},
+			// Add config with enabled=true: Should result in NO change/plan
+			{
+				Config: testAccAlloydbCluster_dataplexConfigExplicit(context, true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "dataplex_config.0.enabled", "true"),
+				),
+			},
+			// Update to enabled=false: Verify PATCH works
+			{
+				Config: testAccAlloydbCluster_dataplexConfigExplicit(context, false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "dataplex_config.0.enabled", "false"),
+				),
+			},
+			{
+				ResourceName:            "google_alloydb_cluster.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"deletion_protection", "initial_user", "cluster_id", "location"},
+			},
+		},
+	})
+}
+
+func TestAccAlloydbCluster_withDataplexConfigDisabled(t *testing.T) {
+	t.Parallel()
+
+	context := map[string]interface{}{
+		"random_suffix": acctest.RandString(t, 10),
+	}
+
+	acctest.VcrTest(t, resource.TestCase{
+		PreCheck:                 func() { acctest.AccTestPreCheck(t) },
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories(t),
+		CheckDestroy:             testAccCheckAlloydbClusterDestroyProducer(t),
+		Steps: []resource.TestStep{
+			// Create with Dataplex enabled=false
+			{
+				Config: testAccAlloydbCluster_dataplexConfigExplicit(context, false),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "dataplex_config.0.enabled", "false"),
+				),
+			},
+			// Update to Dataplex enabled=true: Verify PATCH works
+			{
+				Config: testAccAlloydbCluster_dataplexConfigExplicit(context, true),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("google_alloydb_cluster.default", "dataplex_config.0.enabled", "true"),
+				),
+			},
+			{
+				ResourceName:            "google_alloydb_cluster.default",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"deletion_protection", "initial_user", "cluster_id", "location"},
+			},
+		},
+	})
+}
+
+// Config with no dataplex_config block.
+func testAccAlloydbCluster_noDataplexConfig(context map[string]interface{}) string {
+	return acctest.Nprintf(`
+resource "google_alloydb_cluster" "default" {
+  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  location   = "us-central1"
+  network_config {
+    network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
+  }
+  initial_user {
+    password = "tf_test_cluster_secret%{random_suffix}"
+  }
+  deletion_protection = false
+}
+data "google_project" "project" {}
+resource "google_compute_network" "default" {
+  name = "tf-test-alloydb-cluster%{random_suffix}"
+}
+`, context)
+}
+
+// Config with explicit enabled/disabled dataplex_config block.
+func testAccAlloydbCluster_dataplexConfigExplicit(context map[string]interface{}, enabled bool) string {
+	context["dataplex_enabled"] = enabled
+	return acctest.Nprintf(`
+resource "google_alloydb_cluster" "default" {
+  cluster_id = "tf-test-alloydb-cluster%{random_suffix}"
+  location   = "us-central1"
+  network_config {
+    network = "projects/${data.google_project.project.number}/global/networks/${google_compute_network.default.name}"
+  }
+  initial_user {
+    password = "tf_test_cluster_secret%{random_suffix}"
+  }
+  dataplex_config {
+    enabled = %{dataplex_enabled}
+  }
+  deletion_protection = false
+}
+data "google_project" "project" {}
 resource "google_compute_network" "default" {
   name = "tf-test-alloydb-cluster%{random_suffix}"
 }

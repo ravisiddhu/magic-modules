@@ -54,18 +54,23 @@ custom_code:
 sweeper:
   url_substitutions:
     - zone: "us-central1-a"
-examples:
+include_in_tgc_next: true
+samples:
   - name: 'network_endpoint_group'
     primary_resource_id: 'neg'
-    vars:
-      neg_name: 'my-lb-neg'
-      network_name: 'neg-network'
-      subnetwork_name: 'neg-subnetwork'
+    steps:
+      - name: 'network_endpoint_group'
+        resource_id_vars:
+          neg_name: 'my-lb-neg'
+          network_name: 'neg-network'
+          subnetwork_name: 'neg-subnetwork'
   - name: 'network_endpoint_group_non_gcp'
     primary_resource_id: 'neg'
-    vars:
-      neg_name: 'my-lb-neg'
-      network_name: 'neg-network'
+    steps:
+      - name: 'network_endpoint_group_non_gcp'
+        resource_id_vars:
+          neg_name: 'my-lb-neg'
+          network_name: 'neg-network'
 parameters:
   - name: 'zone'
     type: ResourceRef
@@ -117,6 +122,7 @@ properties:
       - 'INTERNET_FQDN_PORT'
       - 'SERVERLESS'
       - 'PRIVATE_SERVICE_CONNECT'
+      - 'GCE_VM_IP_DEDICATED_BACKEND'
   - name: 'size'
     type: Integer
     description: Number of network endpoints in the network endpoint group.
